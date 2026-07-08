@@ -129,4 +129,18 @@ final class ConfigDeploymentServiceTest extends TestCase
         $this->assertStringContainsString('clear_old', $controller);
         $this->assertStringContainsString('config_versions.delete', $controller);
     }
+
+    public function test_config_apply_and_rollback_are_audited_with_redacted_agent_result(): void
+    {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/src/Services/ConfigDeploymentService.php');
+
+        $this->assertStringContainsString('auditConfigAction', $source);
+        $this->assertStringContainsString('config.validated', $source);
+        $this->assertStringContainsString('config.validation_failed', $source);
+        $this->assertStringContainsString('config.applied', $source);
+        $this->assertStringContainsString('config.apply_failed', $source);
+        $this->assertStringContainsString('config.rolled_back', $source);
+        $this->assertStringContainsString('config.rollback_failed', $source);
+        $this->assertStringContainsString('$this->redactedAgentResult($agentResult)', $source);
+    }
 }

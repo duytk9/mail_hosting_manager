@@ -15,6 +15,7 @@ final class AuthRepository extends AbstractPdoRepository
              WHERE u.deleted_at IS NULL
                AND u.linux_username = :login
                AND u.role IN (\'super_admin\', \'tenant_admin\', \'domain_admin\', \'support_readonly\')
+               AND u.security_locked_at IS NULL
                AND (u.tenant_id IS NULL OR ' . TenantLifecyclePolicy::sqlMailAccessCondition('user_tenant') . ')
              LIMIT 1';
 

@@ -15,6 +15,8 @@ use MailPanel\Security\TotpService;
 
 final class AuthService
 {
+    private const DEFAULT_ADMIN_TOTP_GRACE_LOGINS = 5;
+
     public function __construct(
         private readonly AuthRepository $authRepository,
         private readonly UserRepository $users,
@@ -70,6 +72,8 @@ final class AuthService
                 $this->recordFailure($rateLimitKey, $rateLimit, 'auth.admin_login.totp_failed', $user, $ipAddress, $userAgent, 'user');
                 throw new InvalidArgumentException('Invalid one-time password.');
             }
+        } else {
+            $user = $this->enforceAdminTotpGrace($user, $ipAddress, $userAgent);
         }
 
         $this->authRepository->updateAdminLastLogin((int) $user['id']);
@@ -233,6 +237,71 @@ final class AuthService
             'ip_address' => $ipAddress,
             'user_agent' => $userAgent,
         ]);
+    }
+
+    private function enforceAdminTotpGrace(array $user, ?string $ipAddress, ?string $userAgent): array
+    {
+        if (!in_array((string) ($user['role'] ?? ''), ['super_admin', 'tenant_admin', 'domain_admin', 'support_readonly'], true)) {
+            return $user;
+        }
+
+        $limit = $this->adminTotpGraceLimit();
+        $userId = (int) ($user['id'] ?? 0);
+        $currentCount = (int) ($user['totp_grace_login_count'] ?? 0);
+
+        if ($userId <= 0) {
+            throw new InvalidArgumentException('Invalid credentials.');
+        }
+
+        if ($currentCount >= $limit) {
+            $this->users->lockForSecurity($userId, 'totp_required_after_grace');
+            $this->auditLog->log([
+                'actor_id' => $userId,
+                'actor_role' => $user['role'] ?? 'admin',
+                'tenant_id' => $user['tenant_id'] ?? null,
+                'action' => 'auth.admin_login.locked_totp_required',
+                'target_type' => 'user',
+                'target_id' => $userId,
+                'ip_address' => $ipAddress,
+                'user_agent' => $userAgent,
+                'new_values' => [
+                    'totp_grace_login_count' => $currentCount,
+                    'totp_grace_limit' => $limit,
+                ],
+            ]);
+
+            throw new InvalidArgumentException('Two-factor authentication setup is required. Account locked.');
+        }
+
+        $newCount = $this->users->incrementTotpGraceLoginCount($userId);
+        $remaining = max(0, $limit - $newCount);
+        $this->auditLog->log([
+            'actor_id' => $userId,
+            'actor_role' => $user['role'] ?? 'admin',
+            'tenant_id' => $user['tenant_id'] ?? null,
+            'action' => 'auth.admin_login.totp_grace_used',
+            'target_type' => 'user',
+            'target_id' => $userId,
+            'ip_address' => $ipAddress,
+            'user_agent' => $userAgent,
+            'new_values' => [
+                'totp_grace_login_count' => $newCount,
+                'totp_grace_remaining' => $remaining,
+                'totp_grace_limit' => $limit,
+            ],
+        ]);
+
+        $user['totp_grace_login_count'] = $newCount;
+        $user['totp_grace_remaining'] = $remaining;
+
+        return $user;
+    }
+
+    private function adminTotpGraceLimit(): int
+    {
+        $configured = (int) ($this->appConfig['totp']['grace_logins'] ?? self::DEFAULT_ADMIN_TOTP_GRACE_LOGINS);
+
+        return max(1, min(30, $configured));
     }
 
     private function isSuperAdminIpAllowlistEnabled(): bool

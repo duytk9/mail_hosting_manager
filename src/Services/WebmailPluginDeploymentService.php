@@ -282,7 +282,8 @@ PHP;
         credentials: 'same-origin',
         headers: {
           'Accept': 'application/json',
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-MailPanel-Webmail-Bridge': '1'
         },
         body: JSON.stringify({
           email: email,

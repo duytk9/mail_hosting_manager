@@ -26,10 +26,22 @@ final class Phase2RendererTest extends TestCase
     public function test_fail2ban_renderer_outputs_dovecot_jail(): void
     {
         $draft = (new Fail2banConfigRenderer(__DIR__))->render();
+        $extras = [];
+
+        foreach ($draft['extras'] as $extra) {
+            $extras[basename((string) $extra['path'])] = (string) $extra['content'];
+        }
 
         $this->assertStringContainsString('[dovecot]', $draft['content']);
         $this->assertStringContainsString('[webmail-auth]', $draft['content']);
         $this->assertStringContainsString('enabled = false', $draft['content']);
+        $this->assertStringContainsString('[exim-smtp-auth]', $draft['content']);
+        $this->assertStringContainsString('[exim-reject]', $draft['content']);
+        $this->assertStringContainsString('logpath = /var/log/exim4/mainlog', $draft['content']);
+        $this->assertStringNotContainsString('journalmatch = _SYSTEMD_UNIT=exim4.service', $draft['content']);
+        $this->assertStringContainsString('auth failed|invalid credentials|Password mismatch', $extras['mailpanel-dovecot.conf']);
+        $this->assertStringContainsString('authenticator failed for .*\\[<HOST>\\]: 535 Incorrect authentication data', $extras['mailpanel-exim-auth.conf']);
+        $this->assertStringContainsString('relay not permitted|Sender verify failed|Unknown user|Unrouteable address', $extras['mailpanel-exim-reject.conf']);
         $this->assertSame('fail2ban', $draft['service']);
     }
 

@@ -11,7 +11,7 @@ return static function (Router $router): void {
     $router->add('POST', '/api/admin/login', [AuthController::class, 'adminLogin']);
     $router->add('POST', '/api/user/login', [AuthController::class, 'mailboxLogin']);
     $router->add('POST', '/api/user/password/change', [AuthController::class, 'mailboxPasswordChange']);
-    $router->add('POST', '/api/webmail/password-change', [AuthController::class, 'mailboxPasswordChange']);
+    $router->add('POST', '/api/webmail/password-change', [AuthController::class, 'webmailMailboxPasswordChange']);
     $router->add('POST', '/api/logout', [AuthController::class, 'logout'], ['auth' => true]);
     $router->add('POST', '/api/admin/tokens', [AuthController::class, 'issueToken'], ['auth' => true, 'permission' => 'api_tokens.create', 'token_scopes' => ['tokens.write']]);
     $router->add('POST', '/api/admin/login-keys', [AuthController::class, 'issueLoginKey'], ['auth' => true, 'permission' => 'api_tokens.create', 'token_scopes' => ['tokens.write']]);

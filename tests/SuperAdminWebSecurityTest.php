@@ -19,6 +19,11 @@ final class SuperAdminWebSecurityTest extends TestCase
         $this->assertStringContainsString('name="linux_username"', $view);
         $this->assertStringContainsString('$request->body[\'linux_username\'] ?? ($request->body[\'username\'] ?? \'\')', $controller);
         $this->assertStringContainsString('name="new_password"', $view);
+        $this->assertStringContainsString("'toggle_security_lock'", $controller);
+        $this->assertStringContainsString('handleToggleSuperAdminSecurityLock', $controller);
+        $this->assertStringContainsString('setSecurityLock(', $controller);
+        $this->assertStringContainsString('name="_intent" value="toggle_security_lock"', $view);
+        $this->assertStringContainsString('name="locked"', $view);
         $this->assertStringNotContainsString('Mật khẩu mới: [', $controller);
         $this->assertGreaterThanOrEqual(5, substr_count($view, 'name="current_password"'));
         $this->assertGreaterThanOrEqual(5, substr_count($view, 'name="otp"'));

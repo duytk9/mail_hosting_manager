@@ -52,6 +52,10 @@ final class AppSecuritySettingsStoreTest extends TestCase
 
         $this->assertStringContainsString("'.tmp.' . bin2hex(random_bytes(8))", $source);
         $this->assertStringContainsString('@chmod($tempPath, 0640)', $source);
+        $this->assertStringContainsString('mkdir($directory, 0750, true)', $source);
+        $this->assertStringContainsString('@chmod($directory, 0750)', $source);
+        $this->assertStringContainsString('@chmod($path, 0640)', $source);
+        $this->assertStringContainsString('assertNoSymlinkSegments', $source);
         $this->assertStringContainsString('Unsafe application settings directory.', $source);
     }
 }

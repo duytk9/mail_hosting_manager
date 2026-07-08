@@ -41,13 +41,16 @@ final class AdminSecurityService
         return $user;
     }
 
-    public function startTotpEnrollment(int $userId, string $currentPassword, ?string $otp = null): array
+    public function startTotpEnrollment(int $userId, string $currentPassword, ?string $otp = null, ?string $label = null): array
     {
         $user = $this->requireUser($userId);
         $this->assertSensitiveActionAllowed($userId, $currentPassword, $otp);
 
         $secret = $this->totp->generateSecret();
         $this->users->storePendingTotpSecret($userId, $this->totp->protectSecret($secret));
+        $label = $this->totpLabel($user, $label);
+        $otpauthUri = $this->totp->otpauthUri($label, $secret);
+        $qrCode = $this->totp->qrCode($otpauthUri);
 
         $this->auditLog->log([
             'actor_id' => $userId,
@@ -60,7 +63,9 @@ final class AdminSecurityService
 
         return [
             'secret' => $secret,
-            'otpauth_uri' => $this->totp->otpauthUri((string) $user['email'], $secret),
+            'label' => $label,
+            'otpauth_uri' => $otpauthUri,
+            'qr_data_uri' => $qrCode['data_uri'],
         ];
     }
 
@@ -221,6 +226,25 @@ final class AdminSecurityService
         }
 
         return $user;
+    }
+
+    private function totpLabel(array $user, ?string $preferredLabel): string
+    {
+        $label = trim((string) ($preferredLabel ?? ''));
+        if ($label === '') {
+            $username = trim((string) ($user['linux_username'] ?? ''));
+            if ($username === '') {
+                $username = trim((string) ($user['email'] ?? 'admin'));
+            }
+            $label = 'portal - ' . $username;
+        }
+
+        $label = preg_replace('/[\x00-\x1F\x7F]+/', '', $label) ?? '';
+        $label = str_replace(':', ' - ', $label);
+        $label = preg_replace('/\s+/', ' ', $label) ?? '';
+        $label = trim($label);
+
+        return $label !== '' ? substr($label, 0, 96) : 'portal:admin';
     }
 
     private function verifyCurrentPassword(array $user, string $currentPassword): array

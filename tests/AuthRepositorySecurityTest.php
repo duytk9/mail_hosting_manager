@@ -29,6 +29,7 @@ final class AuthRepositorySecurityTest extends TestCase
         $this->assertStringContainsString('SELECT u.* FROM users u', $source);
         $this->assertStringContainsString('LEFT JOIN tenants user_tenant', $source);
         $this->assertStringContainsString('u.tenant_id IS NULL OR ', $source);
+        $this->assertStringContainsString('u.security_locked_at IS NULL', $source);
         $this->assertStringContainsString("TenantLifecyclePolicy::sqlMailAccessCondition('user_tenant')", $source);
     }
 
@@ -65,6 +66,14 @@ final class AuthRepositorySecurityTest extends TestCase
         $this->assertNull($repository->findAdminByLogin('expired-admin'));
     }
 
+    public function test_find_admin_by_login_blocks_security_locked_admins(): void
+    {
+        $repository = $this->repository();
+        $this->insertUser(5, null, 'super_admin', 'locked-admin', 'totp_required_after_grace');
+
+        $this->assertNull($repository->findAdminByLogin('locked-admin'));
+    }
+
     private function repository(): AuthRepository
     {
         if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
@@ -96,6 +105,8 @@ final class AuthRepositorySecurityTest extends TestCase
                 tenant_id INTEGER NULL,
                 role TEXT NOT NULL,
                 linux_username TEXT NOT NULL,
+                security_locked_at TEXT NULL,
+                security_lock_reason TEXT NULL,
                 deleted_at TEXT NULL
             )'
         );
@@ -119,18 +130,20 @@ final class AuthRepositorySecurityTest extends TestCase
         ]);
     }
 
-    private function insertUser(int $id, ?int $tenantId, string $role, string $linuxUsername): void
+    private function insertUser(int $id, ?int $tenantId, string $role, string $linuxUsername, ?string $lockReason = null): void
     {
         $pdo = $this->repositoryPdo();
         $statement = $pdo->prepare(
-            'INSERT INTO users (id, tenant_id, role, linux_username, deleted_at)
-             VALUES (:id, :tenant_id, :role, :linux_username, NULL)'
+            'INSERT INTO users (id, tenant_id, role, linux_username, security_locked_at, security_lock_reason, deleted_at)
+             VALUES (:id, :tenant_id, :role, :linux_username, :security_locked_at, :security_lock_reason, NULL)'
         );
         $statement->execute([
             'id' => $id,
             'tenant_id' => $tenantId,
             'role' => $role,
             'linux_username' => $linuxUsername,
+            'security_locked_at' => $lockReason === null ? null : '2026-07-07 00:00:00',
+            'security_lock_reason' => $lockReason,
         ]);
     }
 

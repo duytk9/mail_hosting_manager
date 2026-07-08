@@ -31,11 +31,23 @@ return static function (Router $router): void {
 
     $router->add('POST', '/admin/login', [AdminAuthController::class, 'login']);
 
+    $router->add('GET', '/admin/forgot-password', [AdminAuthController::class, 'forgotPassword']);
+
+    $router->add('POST', '/admin/forgot-password', [AdminAuthController::class, 'forgotPassword']);
+
+    $router->add('GET', '/admin/reset-password', [AdminAuthController::class, 'resetPassword']);
+
+    $router->add('POST', '/admin/reset-password', [AdminAuthController::class, 'resetPassword']);
+
     $router->add('GET', '/admin/dashboard', [AdminDashboardController::class, 'dashboard']);
 
     $router->add('GET', '/admin/security', [AdminSecurityController::class, 'security']);
 
     $router->add('POST', '/admin/security', [AdminSecurityController::class, 'security']);
+
+    $router->add('GET', '/admin/portal-settings', [AdminSecurityController::class, 'portalSettings']);
+
+    $router->add('POST', '/admin/portal-settings', [AdminSecurityController::class, 'portalSettings']);
 
     $router->add('GET', '/admin/packages', [AdminPackageController::class, 'packages']);
 

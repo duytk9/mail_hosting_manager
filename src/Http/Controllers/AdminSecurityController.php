@@ -49,7 +49,8 @@ final class AdminSecurityController
         private readonly View $view,
         private readonly AuditLogService $auditLog,
         private readonly AcmeTlsService $acmeTlsService,
-        private readonly ConfigDeploymentService $configDeploymentService
+        private readonly ConfigDeploymentService $configDeploymentService,
+        private readonly array $appConfig = []
     ) {
     }
 
@@ -72,9 +73,10 @@ final class AdminSecurityController
         $identity = $this->sessions->identity() ?? [];
         $securityUser = $this->users->find((int) ($identity['id'] ?? 0)) ?? [];
         $totpSetup = $this->sessions->pullFlash('totp_setup');
-        unset($securityUser['password_hash'], $securityUser['totp_secret']);
-
-        $portalConfig = $this->appSecuritySettingsService->portalDomainConfig();
+        unset($securityUser['password_hash'], $securityUser['totp_secret'], $securityUser['totp_pending_secret']);
+        if ($securityUser !== []) {
+            $this->sessions->replaceIdentity($securityUser);
+        }
 
         return Response::html($this->renderPage('admin/pages/security.php', [
             'securityUser' => $securityUser,
@@ -82,11 +84,42 @@ final class AdminSecurityController
             'isImpersonating' => $this->sessions->isImpersonating(),
             'impersonatorLogin' => $this->displayAdminLogin($this->sessions->impersonatorIdentity() ?? []),
             'totpSetup' => $totpSetup,
-            'portalConfig' => $portalConfig,
             'isSuperAdmin' => $this->isSuperAdmin(),
         ], 'security', 'Bảo mật tài khoản', [
             'description' => '',
             'quick_actions' => $this->buildQuickActions('security'),
+        ]));
+    }
+
+    public function portalSettings(Request $request): Response
+    {
+        if ($redirect = $this->guardAuthenticatedPage('/admin/portal-settings')) {
+            return $redirect;
+        }
+
+        if ($redirect = $this->guardPermission('system_settings.view', '/admin/dashboard')) {
+            return $redirect;
+        }
+
+        if (!$this->isSuperAdmin()) {
+            $this->sessions->flash('error', 'Chỉ Admin level mới được cấu hình portal.');
+            return Response::redirect('/admin/dashboard');
+        }
+
+        if ($request->method === 'POST') {
+            if ($redirect = $this->guardPermission('system_settings.update', '/admin/portal-settings')) {
+                return $redirect;
+            }
+
+            return $this->handleUpdatePortalSettings($request);
+        }
+
+        return Response::html($this->renderPage('admin/pages/portal_settings.php', [
+            'securityUser' => $this->sanitizeAdminIdentity($this->users->find((int) (($this->sessions->identity() ?? [])['id'] ?? 0)) ?? []),
+            'portalSettings' => $this->appSecuritySettingsService->portalSettingsConfig(),
+        ], 'portal_settings', 'Cấu hình Portal', [
+            'description' => '',
+            'quick_actions' => $this->buildQuickActions('portal_settings'),
         ]));
     }
 
@@ -110,7 +143,7 @@ final class AdminSecurityController
 
             if ($redirect = $this->guardPermission(
                 match ($intent) {
-                    'sync_access', 'disable_ssh', 'toggle_ssh', 'toggle_sudo', 'update_ip_allowlist', 'reset_password' => 'super_admins.update',
+                    'sync_access', 'disable_ssh', 'toggle_ssh', 'toggle_sudo', 'toggle_security_lock', 'update_ip_allowlist', 'reset_password' => 'super_admins.update',
                     'delete' => 'super_admins.delete',
                     default => 'super_admins.create',
                 },
@@ -131,6 +164,7 @@ final class AdminSecurityController
                 'disable_ssh' => $this->handleDisableSuperAdminSsh($request),
                 'toggle_ssh' => $this->handleToggleSuperAdminSsh($request),
                 'toggle_sudo' => $this->handleToggleSuperAdminSudo($request),
+                'toggle_security_lock' => $this->handleToggleSuperAdminSecurityLock($request),
                 'update_ip_allowlist' => $this->handleUpdateSuperAdminIpAllowlist($request),
                 'reset_password' => $this->handleResetSuperAdminPassword($request),
                 'delete' => $this->handleDeleteSuperAdmin($request),
@@ -151,6 +185,7 @@ final class AdminSecurityController
             'superAdminsPagination' => $superAdminPage['meta'],
             'superAdminIpAllowlist' => $this->appSecuritySettingsService->superAdminIpAllowlistConfig(),
             'currentClientIp' => $request->ip(),
+            'currentAdminId' => (int) (($this->sessions->identity() ?? [])['id'] ?? 0),
             'filters' => [
                 'search' => (string) ($request->query['search'] ?? ''),
             ],
@@ -186,7 +221,8 @@ final class AdminSecurityController
                 $this->sessions->flash('totp_setup', $this->adminSecurityService->startTotpEnrollment(
                     $userId,
                     (string) ($request->body['current_password'] ?? ''),
-                    isset($request->body['otp']) ? (string) $request->body['otp'] : null
+                    isset($request->body['otp']) ? (string) $request->body['otp'] : null,
+                    $this->totpPortalLabel($request, $identity)
                 ));
                 $this->sessions->flash('success', 'Đã tạo secret TOTP mới. Hãy scan rồi xác nhận.');
             } elseif ($intent === 'totp_confirm') {
@@ -195,6 +231,7 @@ final class AdminSecurityController
                     (string) ($request->body['otp'] ?? ''),
                     (string) ($request->body['current_password'] ?? '')
                 );
+                $this->refreshAdminSessionIdentity($userId, $identity);
                 $this->sessions->flash('success', 'Đã bật 2FA TOTP.');
             } elseif ($intent === 'totp_disable') {
                 $this->adminSecurityService->disableTotp(
@@ -202,9 +239,8 @@ final class AdminSecurityController
                     (string) ($request->body['otp'] ?? ''),
                     (string) ($request->body['current_password'] ?? '')
                 );
+                $this->refreshAdminSessionIdentity($userId, $identity);
                 $this->sessions->flash('success', 'Đã tắt 2FA TOTP.');
-            } elseif ($intent === 'update_portal_domain') {
-                return $this->handleUpdatePortalDomain($request);
             } else {
                 throw new \InvalidArgumentException('Unknown security action.');
             }
@@ -213,6 +249,14 @@ final class AdminSecurityController
         }
 
         return Response::redirect('/admin/security');
+    }
+
+    private function refreshAdminSessionIdentity(int $userId, array $fallbackIdentity): void
+    {
+        $freshUser = $this->users->find($userId) ?? $fallbackIdentity;
+        unset($freshUser['password_hash'], $freshUser['totp_secret'], $freshUser['totp_pending_secret']);
+
+        $this->sessions->replaceIdentity($freshUser);
     }
 
     private function handleUpdatePortalDomain(Request $request): Response
@@ -279,6 +323,75 @@ final class AdminSecurityController
         }
 
         return Response::redirect('/admin/security');
+    }
+
+    private function handleUpdatePortalSettings(Request $request): Response
+    {
+        try {
+            if (!$this->isSuperAdmin()) {
+                throw new \RuntimeException('Only Admin level can update portal settings.');
+            }
+
+            $this->assertCurrentAdminSensitiveAction($request);
+
+            $previous = $this->appSecuritySettingsService->portalSettingsConfig();
+            $portalDomain = strtolower(trim((string) ($request->body['portal_domain'] ?? '')));
+            $identity = $this->sessions->identity() ?? [];
+            $actor = [
+                'actor_id' => $identity['id'] ?? null,
+                'actor_role' => $identity['role'] ?? 'super_admin',
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ];
+
+            $updated = $this->appSecuritySettingsService->updatePortalSettings(
+                $portalDomain,
+                (string) ($request->body['password_reset_from_email'] ?? ''),
+                (string) ($request->body['password_reset_from_name'] ?? ''),
+                (string) ($request->body['password_reset_subject'] ?? ''),
+                (int) ($request->body['password_reset_ttl_seconds'] ?? 3600),
+                (string) ($request->body['password_reset_transport'] ?? 'mail'),
+                (string) ($request->body['password_reset_smtp_host'] ?? ''),
+                (int) ($request->body['password_reset_smtp_port'] ?? 587),
+                (string) ($request->body['password_reset_smtp_encryption'] ?? 'starttls'),
+                (string) ($request->body['password_reset_smtp_username'] ?? ''),
+                (string) ($request->body['password_reset_smtp_password'] ?? ''),
+                isset($request->body['password_reset_smtp_clear_password']),
+                (int) ($request->body['password_reset_smtp_timeout_seconds'] ?? 15),
+                $actor['actor_id'],
+                $actor['actor_role'],
+                $actor['ip_address'],
+                $actor['user_agent']
+            );
+
+            if ((string) ($previous['portal_domain'] ?? '') !== (string) $updated['portal_domain']) {
+                $adminEmail = trim((string) ($identity['email'] ?? ''));
+                if ($adminEmail === '') {
+                    $adminEmail = 'admin@' . $updated['portal_domain'];
+                }
+
+                try {
+                    $this->acmeTlsService->issuePortalDomain((string) $updated['portal_domain'], $adminEmail, $actor);
+                    $drafts = $this->configDeploymentService->generateDrafts();
+                    foreach ($drafts as $draft) {
+                        $this->configDeploymentService->applyVersion((int) $draft['id'], false);
+                    }
+                    $this->sessions->flash('success', 'Đã lưu cấu hình portal, cập nhật SSL và reload cấu hình.');
+                } catch (Throwable $e) {
+                    $drafts = $this->configDeploymentService->generateDrafts();
+                    foreach ($drafts as $draft) {
+                        $this->configDeploymentService->applyVersion((int) $draft['id'], false);
+                    }
+                    $this->sessions->flash('error', 'Đã lưu cấu hình portal nhưng cấp SSL gặp lỗi: ' . UiMessage::exception($e));
+                }
+            } else {
+                $this->sessions->flash('success', 'Đã lưu cấu hình portal.');
+            }
+        } catch (Throwable $exception) {
+            $this->sessions->flash('error', UiMessage::exception($exception));
+        }
+
+        return Response::redirect('/admin/portal-settings');
     }
 
     private function handleCreateSuperAdmin(Request $request): Response
@@ -391,6 +504,24 @@ final class AdminSecurityController
         return Response::redirect('/admin/super-admins');
     }
 
+    private function handleToggleSuperAdminSecurityLock(Request $request): Response
+    {
+        try {
+            $identity = $this->sessions->identity() ?? [];
+            $locked = (string) ($request->body['locked'] ?? '1') === '1';
+            $this->superAdminService->setSecurityLock(
+                (int) ($request->body['user_id'] ?? 0),
+                $locked,
+                isset($identity['id']) ? (int) $identity['id'] : null
+            );
+            $this->sessions->flash('success', $locked ? 'Đã khóa đăng nhập tài khoản Admin level.' : 'Đã mở khóa đăng nhập tài khoản Admin level.');
+        } catch (Throwable $exception) {
+            $this->sessions->flash('error', UiMessage::exception($exception));
+        }
+
+        return Response::redirect('/admin/super-admins');
+    }
+
     private function handleUpdateSuperAdminIpAllowlist(Request $request): Response
     {
         try {
@@ -442,17 +573,65 @@ final class AdminSecurityController
         return trim((string) ($user['email'] ?? ''));
     }
 
+    private function totpPortalLabel(Request $request, array $identity): string
+    {
+        $host = $this->configuredPortalHost();
+        if ($host === '') {
+            $host = $this->safeRequestHost((string) ($request->header('Host') ?? $request->server['SERVER_NAME'] ?? ''));
+        }
+
+        $path = preg_replace('#/(security|login)$#', '', $request->path) ?: '/admin';
+        $path = '/' . trim(preg_replace('/[^a-z0-9\/._-]/i', '', $path) ?? 'admin', '/');
+        $username = $this->displayAdminLogin($identity);
+
+        return trim(($host !== '' ? $host : 'portal') . $path, '/') . ' - ' . ($username !== '' ? $username : 'admin');
+    }
+
+    private function configuredPortalHost(): string
+    {
+        $baseUrl = trim((string) ($this->appConfig['base_url'] ?? ''));
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+
+        return is_string($host) ? $this->safeRequestHost($host) : '';
+    }
+
+    private function safeRequestHost(string $host): string
+    {
+        $host = strtolower(trim($host));
+        if ($host === '') {
+            return '';
+        }
+
+        if (str_contains($host, ',')) {
+            $host = trim(explode(',', $host)[0]);
+        }
+
+        $host = preg_replace('/[^a-z0-9.\-:\[\]]/i', '', $host) ?? '';
+        if (str_starts_with($host, '[')) {
+            return preg_match('/\A\[[0-9a-f:.]+\](?::[0-9]{1,5})?\z/i', $host) === 1 ? $host : '';
+        }
+
+        $withoutPort = preg_replace('/:\d{1,5}\z/', '', $host) ?? '';
+
+        return preg_match('/\A(?:localhost|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\d{1,3}(?:\.\d{1,3}){3})\z/', $withoutPort) === 1
+            ? $host
+            : '';
+    }
+
     private function buildQuickActions(string $active): array
     {
         $actions = [
             'dashboard' => [
                 ['label' => 'Tạo user level', 'href' => '/admin/tenants#tenant-create', 'variant' => 'primary', 'roles' => ['super_admin']],
-                ['label' => 'Thêm domain', 'href' => '/admin/domains#domain-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
-                ['label' => 'Tạo tài khoản mail', 'href' => '/admin/mailboxes#mailbox-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
+                ['label' => 'Thêm domain', 'href' => '/admin/domains#domain-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin']],
+                ['label' => 'Tạo tài khoản mail', 'href' => '/admin/mailboxes#mailbox-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin']],
             ],
             'security' => [
                 ['label' => 'Đổi mật khẩu', 'href' => '#password-policy', 'variant' => 'primary'],
                 ['label' => 'Thiết lập TOTP', 'href' => '#totp-setup', 'variant' => 'secondary'],
+            ],
+            'portal_settings' => [
+                ['label' => 'Lưu cấu hình', 'href' => '#portal-settings-form', 'variant' => 'primary', 'roles' => ['super_admin']],
             ],
             'packages' => [
                 ['label' => 'Tạo gói dịch vụ', 'href' => '#package-create', 'variant' => 'primary', 'roles' => ['super_admin']],
@@ -461,16 +640,16 @@ final class AdminSecurityController
                 ['label' => 'Tạo user level', 'href' => '#tenant-create', 'variant' => 'primary', 'roles' => ['super_admin']],
             ],
             'domains' => [
-                ['label' => 'Thêm domain', 'href' => '#domain-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
-                ['label' => 'Kiểm tra DNS / TLS', 'href' => '/admin/dns-checks', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
+                ['label' => 'Thêm domain', 'href' => '#domain-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin']],
+                ['label' => 'Kiểm tra DNS / TLS', 'href' => '/admin/dns-checks', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin']],
             ],
             'mailboxes' => [
-                ['label' => 'Tạo tài khoản mail', 'href' => '#mailbox-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
+                ['label' => 'Tạo tài khoản mail', 'href' => '#mailbox-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin']],
             ],
             'routing' => [
-                ['label' => 'Tạo bí danh', 'href' => '#alias-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
-                ['label' => 'Tạo chuyển tiếp', 'href' => '#forward-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
-                ['label' => 'Tạo nhóm mail', 'href' => '#mail-group-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin', 'domain_admin']],
+                ['label' => 'Tạo bí danh', 'href' => '#alias-create', 'variant' => 'primary', 'roles' => ['super_admin', 'tenant_admin']],
+                ['label' => 'Tạo chuyển tiếp', 'href' => '#forward-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin']],
+                ['label' => 'Tạo nhóm mail', 'href' => '#mail-group-create', 'variant' => 'secondary', 'roles' => ['super_admin', 'tenant_admin']],
             ],
             'super_admins' => [
                 ['label' => 'Tạo quản trị viên', 'href' => '#super-admin-create', 'variant' => 'primary', 'roles' => ['super_admin']],

@@ -11,14 +11,15 @@ use MailPanel\Services\AuditLogService;
 use MailPanel\Services\PasswordHashingService;
 use MailPanel\Services\PasswordPolicyService;
 
-require_once __DIR__ . '/vendor/autoload.php';
+$appRoot = dirname(__DIR__);
+require_once $appRoot . '/vendor/autoload.php';
 
-Environment::load(__DIR__);
+Environment::load($appRoot);
 
-$config = new Config(__DIR__, [
-    'app' => require __DIR__ . '/config/app.php',
-    'database' => require __DIR__ . '/config/database.php',
-    'mailpanel' => require __DIR__ . '/config/mailpanel.php',
+$config = new Config($appRoot, [
+    'app' => require $appRoot . '/config/app.php',
+    'database' => require $appRoot . '/config/database.php',
+    'mailpanel' => require $appRoot . '/config/mailpanel.php',
 ]);
 
 $database = new Database($config->get('database'));
@@ -95,6 +96,9 @@ try {
     if ($disableTotp) {
         $users->disableTotp((int) $user['id']);
     }
+
+    $users->clearSecurityLock((int) $user['id']);
+    $users->resetTotpGraceLoginCount((int) $user['id']);
 
     $auditLog->log([
         'actor_id' => null,

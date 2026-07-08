@@ -21,6 +21,7 @@ use MailPanel\Services\MailGroupService;
 use MailPanel\Services\MailboxService;
 use MailPanel\Services\AcmeTlsService;
 use MailPanel\Services\PackageService;
+use MailPanel\Services\PasswordResetService;
 use MailPanel\Services\SuperAdminService;
 use MailPanel\Services\TenantAdminService;
 use MailPanel\Services\TenantLifecyclePolicy;
@@ -45,14 +46,16 @@ final class AdminAuthController
         private readonly AuthorizationService $authorization,
         private readonly View $view,
         private readonly UserRepository $users,
-        private readonly AuditLogService $auditLog
+        private readonly AuditLogService $auditLog,
+        private readonly PasswordResetService $passwordResetService,
+        private readonly array $appConfig = []
     ) {
     }
 
     public function login(Request $request): Response
     {
         if ($this->isAdminAuthenticated()) {
-            return Response::redirect($this->mustForcePasswordChange() ? '/admin/security' : '/admin/dashboard');
+            return Response::redirect($this->adminLandingPath());
         }
 
         $error = null;
@@ -70,7 +73,7 @@ final class AdminAuthController
                     $request->userAgent()
                 );
 
-                return Response::redirect($this->mustForcePasswordChange() ? '/admin/security' : '/admin/dashboard');
+                return Response::redirect($this->adminLandingPath());
             } catch (Throwable $exception) {
                 $error = UiMessage::exception($exception, 'Đăng nhập thất bại.');
             }
@@ -89,6 +92,80 @@ final class AdminAuthController
         $this->sessions->clear();
 
         return Response::redirect('/admin/login');
+    }
+
+    public function forgotPassword(Request $request): Response
+    {
+        if ($this->isAdminAuthenticated()) {
+            return Response::redirect($this->adminLandingPath());
+        }
+
+        $message = null;
+        $error = null;
+        $oldLogin = '';
+
+        if ($request->method === 'POST') {
+            $oldLogin = trim((string) ($request->body['login'] ?? ''));
+
+            try {
+                $message = $this->passwordResetService->requestReset(
+                    $oldLogin,
+                    $this->passwordResetBaseUrl($request),
+                    $request->ip(),
+                    $request->userAgent()
+                );
+                $oldLogin = '';
+            } catch (Throwable $exception) {
+                $error = UiMessage::exception($exception, 'Không thể xử lý yêu cầu lúc này.');
+            }
+        }
+
+        return Response::html($this->view->render('admin/forgot_password.php', [
+            'title' => 'Quên mật khẩu',
+            'message' => $message,
+            'error' => $error,
+            'oldLogin' => $oldLogin,
+            'csrfToken' => $this->sessions->csrfToken(),
+        ]), $error === null ? 200 : 422);
+    }
+
+    public function resetPassword(Request $request): Response
+    {
+        if ($this->isAdminAuthenticated()) {
+            $this->sessions->clear();
+        }
+
+        $token = trim((string) ($request->method === 'POST' ? ($request->body['token'] ?? '') : ($request->query['token'] ?? '')));
+        $error = null;
+        $message = null;
+        $tokenUsable = $this->passwordResetService->validToken($token);
+
+        if ($request->method === 'POST') {
+            try {
+                $this->passwordResetService->completeReset(
+                    $token,
+                    (string) ($request->body['new_password'] ?? ''),
+                    (string) ($request->body['confirm_password'] ?? ''),
+                    $request->ip(),
+                    $request->userAgent()
+                );
+                $token = '';
+                $tokenUsable = false;
+                $message = 'Đã đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.';
+            } catch (Throwable $exception) {
+                $error = UiMessage::exception($exception, 'Không thể đặt lại mật khẩu.');
+                $tokenUsable = $this->passwordResetService->validToken($token);
+            }
+        }
+
+        return Response::html($this->view->render('admin/reset_password.php', [
+            'title' => 'Đặt lại mật khẩu',
+            'token' => $token,
+            'tokenUsable' => $tokenUsable,
+            'message' => $message,
+            'error' => $error,
+            'csrfToken' => $this->sessions->csrfToken(),
+        ]), $error === null ? 200 : 422);
     }
 
     public function impersonate(Request $request): Response
@@ -217,6 +294,34 @@ final class AdminAuthController
         return trim((string) ($user['email'] ?? ''));
     }
 
+    private function adminLandingPath(): string
+    {
+        if ($this->mustForcePasswordChange()) {
+            return '/admin/security';
+        }
+
+        $identity = $this->sessions->identity();
+        if (!is_array($identity)) {
+            return '/admin/login';
+        }
+
+        $actor = new Actor(
+            (int) ($identity['id'] ?? 0),
+            (string) ($identity['role'] ?? 'guest'),
+            isset($identity['tenant_id']) ? (int) $identity['tenant_id'] : null
+        );
+
+        if ($this->authorization->can($actor, 'dashboard.view')) {
+            return '/admin/dashboard';
+        }
+
+        if ($this->authorization->can($actor, 'security.view')) {
+            return '/admin/security';
+        }
+
+        return '/admin/logout';
+    }
+
     private function isAdminAuthenticated(): bool
     {
         return $this->sessions->guard() === 'admin' && is_array($this->sessions->identity());
@@ -227,6 +332,77 @@ final class AdminAuthController
         $identity = $this->sessions->identity() ?? [];
 
         return !empty($identity['force_password_change']);
+    }
+
+    private function passwordResetBaseUrl(Request $request): string
+    {
+        $configured = $this->safeConfiguredBaseUrl((string) ($this->appConfig['base_url'] ?? ''));
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $host = $this->safeRequestHost((string) ($request->header('Host') ?? $request->server['SERVER_NAME'] ?? ''));
+        $scheme = $this->requestScheme($request, $host);
+
+        return $scheme . '://' . ($host !== '' ? $host : '127.0.0.1');
+    }
+
+    private function safeConfiguredBaseUrl(string $baseUrl): string
+    {
+        $baseUrl = trim($baseUrl);
+        $scheme = parse_url($baseUrl, PHP_URL_SCHEME);
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+        if (!in_array($scheme, ['http', 'https'], true) || !is_string($host) || $host === '') {
+            return '';
+        }
+
+        $safeHost = $this->safeRequestHost($host);
+        if ($safeHost === '') {
+            return '';
+        }
+
+        $port = parse_url($baseUrl, PHP_URL_PORT);
+
+        return $scheme . '://' . $safeHost . (is_int($port) ? ':' . $port : '');
+    }
+
+    private function safeRequestHost(string $host): string
+    {
+        $host = strtolower(trim($host));
+        if ($host === '') {
+            return '';
+        }
+
+        if (str_contains($host, ',')) {
+            $host = trim(explode(',', $host)[0]);
+        }
+
+        $host = preg_replace('/[^a-z0-9.\-:\[\]]/i', '', $host) ?? '';
+        if (str_starts_with($host, '[')) {
+            return preg_match('/\A\[[0-9a-f:.]+\](?::[0-9]{1,5})?\z/i', $host) === 1 ? $host : '';
+        }
+
+        $withoutPort = preg_replace('/:\d{1,5}\z/', '', $host) ?? '';
+        if (
+            preg_match('/\A(?:localhost|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\d{1,3}(?:\.\d{1,3}){3})\z/', $withoutPort) !== 1
+        ) {
+            return '';
+        }
+
+        return $host;
+    }
+
+    private function requestScheme(Request $request, string $host): string
+    {
+        if (!empty($request->server['HTTPS']) && $request->server['HTTPS'] !== 'off') {
+            return 'https';
+        }
+
+        if ((int) ($request->server['SERVER_PORT'] ?? 0) === 443) {
+            return 'https';
+        }
+
+        return $host !== '' && !str_starts_with($host, '127.') && $host !== 'localhost' ? 'https' : 'http';
     }
 
 }

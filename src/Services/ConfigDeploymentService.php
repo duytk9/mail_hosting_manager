@@ -9,6 +9,8 @@ use MailPanel\Support\SafePath;
 
 final class ConfigDeploymentService
 {
+    private const GENERATED_CONFIG_GROUP = 'mailpanel-agent';
+
     private readonly string $generatedRoot;
 
     public function __construct(
@@ -222,15 +224,20 @@ final class ConfigDeploymentService
             $this->versions->markStatus($versionId, $status, $error);
 
             if ($stage === 'validate') {
+                $this->auditConfigAction('config.validation_failed', $version, $result, true);
                 throw new \RuntimeException('Config validation failed: ' . $this->agentErrorMessage($result));
             }
+
+            $this->auditConfigAction('config.validated', $version, $result, true);
         } else {
             if ($stage !== 'reload') {
                 $this->versions->markStatus($versionId, 'failed', json_encode($this->redactedAgentResult($result), JSON_UNESCAPED_SLASHES));
+                $this->auditConfigAction('config.apply_failed', $version, $result, false);
                 throw new \RuntimeException('Config apply failed at stage [' . $stage . ']: ' . $this->agentErrorMessage($result));
             }
 
             $this->versions->markStatus($versionId, 'applied');
+            $this->auditConfigAction('config.applied', $version, $result, false);
         }
 
         return ['version' => $this->versions->find($versionId), 'agent' => $result, 'simulate' => $simulate];
@@ -262,8 +269,11 @@ final class ConfigDeploymentService
 
         if ($simulate) {
             if (($result['stage'] ?? '') === 'validate') {
+                $this->auditConfigAction('config.rollback_validation_failed', $previous, $result, true, $versionId);
                 throw new \RuntimeException('Rollback validation failed: ' . $this->agentErrorMessage($result));
             }
+
+            $this->auditConfigAction('config.rollback_validated', $previous, $result, true, $versionId);
 
             return [
                 'rolled_back_version' => $versionId,
@@ -276,7 +286,9 @@ final class ConfigDeploymentService
         if (($result['stage'] ?? '') === 'reload') {
             $this->versions->markStatus($versionId, 'rolled_back');
             $this->versions->markStatus((int) $previous['id'], 'applied');
+            $this->auditConfigAction('config.rolled_back', $previous, $result, false, $versionId);
         } else {
+            $this->auditConfigAction('config.rollback_failed', $previous, $result, false, $versionId);
             throw new \RuntimeException('Rollback apply failed: ' . $this->agentErrorMessage($result));
         }
 
@@ -300,6 +312,7 @@ final class ConfigDeploymentService
         }
 
         $this->assertNoSymlinkPath($directory);
+        $this->hardenGeneratedDirectoryPermissions($directory);
         if (is_link($path)) {
             throw new \RuntimeException('Unsafe generated config file path.');
         }
@@ -309,12 +322,69 @@ final class ConfigDeploymentService
             throw new \RuntimeException('Unable to write generated config file.');
         }
 
+        @chgrp($temporaryPath, self::GENERATED_CONFIG_GROUP);
         @chmod($temporaryPath, 0640);
 
         if (!rename($temporaryPath, $path)) {
             @unlink($temporaryPath);
             throw new \RuntimeException('Unable to publish generated config file atomically.');
         }
+    }
+
+    private function hardenGeneratedDirectoryPermissions(string $directory): void
+    {
+        $normalizedRoot = rtrim(str_replace('\\', '/', $this->generatedRoot), '/');
+        $normalizedDirectory = rtrim(str_replace('\\', '/', $directory), '/');
+
+        if (!str_starts_with($normalizedDirectory, $normalizedRoot . '/') && $normalizedDirectory !== $normalizedRoot) {
+            throw new \RuntimeException('Generated config directory is outside generated root.');
+        }
+
+        $relative = trim(substr($normalizedDirectory, strlen($normalizedRoot)), '/');
+        $current = $this->generatedRoot;
+        @chgrp($current, self::GENERATED_CONFIG_GROUP);
+        @chmod($current, 02750);
+
+        if ($relative === '') {
+            return;
+        }
+
+        foreach (explode('/', $relative) as $segment) {
+            if ($segment === '' || $segment === '..') {
+                throw new \RuntimeException('Unsafe generated config directory path.');
+            }
+
+            $current .= DIRECTORY_SEPARATOR . $segment;
+            if (is_dir($current) && !is_link($current)) {
+                @chgrp($current, self::GENERATED_CONFIG_GROUP);
+                @chmod($current, 02750);
+            }
+        }
+    }
+
+    private function auditConfigAction(string $action, array $version, array $agentResult, bool $simulate, ?int $rolledBackVersionId = null): void
+    {
+        $values = [
+            'service' => $version['service'] ?? null,
+            'version_id' => $version['id'] ?? null,
+            'version' => $version['version'] ?? null,
+            'simulate' => $simulate,
+            'stage' => $agentResult['stage'] ?? null,
+            'agent' => $this->redactedAgentResult($agentResult),
+        ];
+
+        if ($rolledBackVersionId !== null) {
+            $values['rolled_back_version_id'] = $rolledBackVersionId;
+        }
+
+        $this->auditLog->log([
+            'actor_id' => $version['created_by'] ?? null,
+            'actor_role' => 'system',
+            'action' => $action,
+            'target_type' => 'config_version',
+            'target_id' => $version['id'] ?? null,
+            'new_values' => $values,
+        ]);
     }
 
     private function deleteVersionArtifacts(array $version): bool

@@ -25,6 +25,8 @@ EXIM_TRANSPORT_MARKER_BEGIN="# BEGIN MAILPANEL TRANSPORT"
 EXIM_TRANSPORT_MARKER_END="# END MAILPANEL TRANSPORT"
 EXIM_AUTH_MARKER_BEGIN="# BEGIN MAILPANEL AUTH"
 EXIM_AUTH_MARKER_END="# END MAILPANEL AUTH"
+EXIM_ACL_MARKER_BEGIN="# BEGIN MAILPANEL ACL"
+EXIM_ACL_MARKER_END="# END MAILPANEL ACL"
 SUPERADMIN_SUDO_DIR="/etc/sudoers.d"
 GENERATED_ROOT="/var/lib/mailpanel/generated"
 ACTIVE_ROOT="/var/lib/mailpanel/generated/active"
@@ -198,18 +200,28 @@ strip_managed_auth() {
   strip_marked_block "${1:-}" "${2:-}" "$EXIM_AUTH_MARKER_BEGIN" "$EXIM_AUTH_MARKER_END"
 }
 
+strip_managed_acl() {
+  strip_marked_block "${1:-}" "${2:-}" "$EXIM_ACL_MARKER_BEGIN" "$EXIM_ACL_MARKER_END"
+}
+
 strip_managed_template() {
   local source="${1:-}"
   local target="${2:-}"
+  local tmp_acl
   local tmp_auth
+  local tmp_transport
   local tmp_routing
 
+  tmp_acl="$(mktemp /tmp/mailpanel-exim-template-strip-acl-XXXX)"
   tmp_auth="$(mktemp /tmp/mailpanel-exim-template-strip-auth-XXXX)"
+  tmp_transport="$(mktemp /tmp/mailpanel-exim-template-strip-transport-XXXX)"
   tmp_routing="$(mktemp /tmp/mailpanel-exim-template-strip-routing-XXXX)"
-  strip_managed_auth "$source" "$tmp_auth"
-  strip_managed_transport "$tmp_auth" "$tmp_routing"
-  strip_managed_routing "$tmp_routing" "$target"
-  rm -f "$tmp_auth" "$tmp_routing"
+  strip_managed_acl "$source" "$tmp_acl"
+  strip_managed_auth "$tmp_acl" "$tmp_auth"
+  strip_managed_transport "$tmp_auth" "$tmp_transport"
+  strip_managed_routing "$tmp_transport" "$tmp_routing"
+  mv "$tmp_routing" "$target"
+  rm -f "$tmp_acl" "$tmp_auth" "$tmp_transport" "$tmp_routing"
 }
 
 render_exim_template() {
@@ -217,12 +229,14 @@ render_exim_template() {
   local router_snippet="${2:-}"
   local transport_snippet="${3:-}"
   local auth_snippet="${4:-}"
-  local target="${5:-}"
+  local acl_snippet="${5:-}"
+  local target="${6:-}"
 
-  python3 - "$source" "$router_snippet" "$transport_snippet" "$auth_snippet" "$target" \
+  python3 - "$source" "$router_snippet" "$transport_snippet" "$auth_snippet" "$acl_snippet" "$target" \
     "$EXIM_ROUTING_MARKER_BEGIN" "$EXIM_ROUTING_MARKER_END" \
     "$EXIM_TRANSPORT_MARKER_BEGIN" "$EXIM_TRANSPORT_MARKER_END" \
-    "$EXIM_AUTH_MARKER_BEGIN" "$EXIM_AUTH_MARKER_END" <<'PY'
+    "$EXIM_AUTH_MARKER_BEGIN" "$EXIM_AUTH_MARKER_END" \
+    "$EXIM_ACL_MARKER_BEGIN" "$EXIM_ACL_MARKER_END" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -231,13 +245,22 @@ source_path = Path(sys.argv[1])
 router_path = Path(sys.argv[2])
 transport_path = Path(sys.argv[3])
 auth_path = Path(sys.argv[4])
-target_path = Path(sys.argv[5])
-router_begin, router_end, transport_begin, transport_end, auth_begin, auth_end = sys.argv[6:12]
+acl_path = Path(sys.argv[5])
+target_path = Path(sys.argv[6])
+router_begin, router_end, transport_begin, transport_end, auth_begin, auth_end, acl_begin, acl_end = sys.argv[7:15]
 
 text = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
 router = router_path.read_text(encoding="utf-8").strip() if router_path.is_file() else ""
 transport = transport_path.read_text(encoding="utf-8").strip() if transport_path.is_file() else ""
 auth = auth_path.read_text(encoding="utf-8").strip() if auth_path.is_file() else ""
+acl = acl_path.read_text(encoding="utf-8").strip() if acl_path.is_file() else ""
+
+if acl:
+    match = re.search(r'^begin acl\s*$', text, flags=re.MULTILINE)
+    if match is None:
+        raise SystemExit("missing 'begin acl' in exim template")
+    block = f"\n{acl_begin}\n{acl}\n{acl_end}\n"
+    text = text[:match.end()] + block + text[match.end():]
 
 if router:
     match = re.search(r'^begin routers\s*$', text, flags=re.MULTILINE)
@@ -372,6 +395,7 @@ case "$ACTION" in
     EXIM_ROUTER_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-router.conf"
     EXIM_TRANSPORT_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-transport.conf"
     EXIM_AUTH_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-auth.conf"
+    EXIM_ACL_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-acl-mail.conf"
     install -d -m 0755 /etc/exim4/mailpanel
     TMP_INCLUDE="$(mktemp /etc/exim4/mailpanel/check_rcpt_local.validate.XXXX.acl)"
     TMP_CONFIG="$(mktemp /etc/exim4/mailpanel/exim4.validate.XXXX.conf)"
@@ -389,7 +413,7 @@ case "$ACTION" in
       printf '%s\n' "CHECK_RCPT_LOCAL_ACL_FILE=$TMP_INCLUDE"
       printf '%s\n' "$EXIM_MARKER_END"
     } >"$TMP_MACROS"
-    render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$TMP_TEMPLATE_RENDERED"
+    render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$EXIM_ACL_SNIPPET" "$TMP_TEMPLATE_RENDERED"
     { cat "$TMP_MACROS"; cat "$TMP_TEMPLATE_RENDERED"; } >"$TMP_CONFIG"
     chown root:root "$TMP_CONFIG"
     chmod 0644 "$TMP_CONFIG"
@@ -561,6 +585,7 @@ EOF
         EXIM_ROUTER_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-router.conf"
         EXIM_TRANSPORT_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-transport.conf"
         EXIM_AUTH_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-auth.conf"
+        EXIM_ACL_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-acl-mail.conf"
         install -d -m 0755 /etc/exim4 /etc/exim4/mailpanel
         install -o root -g root -m 0644 "$ARG1" "$ARG2"
         install -o root -g root -m 0644 "$ARG1" "$EXIM_LIVE_INCLUDE"
@@ -592,10 +617,15 @@ EOF
         else
           rm -f /etc/exim4/mailpanel/transport.conf
         fi
+        if [[ -f "$EXIM_ACL_SNIPPET" ]]; then
+          install -o root -g root -m 0644 "$EXIM_ACL_SNIPPET" /etc/exim4/mailpanel/acl-mail.conf
+        else
+          rm -f /etc/exim4/mailpanel/acl-mail.conf
+        fi
         TMP_TEMPLATE_BASE="$(mktemp /tmp/mailpanel-exim-template-XXXX)"
         TMP_TEMPLATE_RENDERED="$(mktemp /tmp/mailpanel-exim-template-rendered-XXXX)"
         strip_managed_template "$EXIM_TEMPLATE" "$TMP_TEMPLATE_BASE"
-        render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$TMP_TEMPLATE_RENDERED"
+        render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$EXIM_ACL_SNIPPET" "$TMP_TEMPLATE_RENDERED"
         install -m 0644 "$TMP_TEMPLATE_RENDERED" "$EXIM_TEMPLATE"
         /usr/sbin/update-exim4.conf
         ;;

@@ -79,6 +79,17 @@ final class AuthController
         }
     }
 
+    public function webmailMailboxPasswordChange(Request $request)
+    {
+        try {
+            $this->assertWebmailPasswordBridgeRequest($request);
+        } catch (Throwable) {
+            return ApiResponse::error('Invalid webmail password-change request.', 403);
+        }
+
+        return $this->mailboxPasswordChange($request);
+    }
+
     public function logout(Request $request)
     {
         $this->sessions->clear();
@@ -150,5 +161,99 @@ final class AuthController
             (string) ($request->body['current_password'] ?? ''),
             isset($request->body['otp']) ? (string) $request->body['otp'] : null
         );
+    }
+
+    private function assertWebmailPasswordBridgeRequest(Request $request): void
+    {
+        if (trim((string) $request->header('X-MailPanel-Webmail-Bridge', '')) !== '1') {
+            throw new \RuntimeException('Missing webmail bridge header.');
+        }
+
+        $contentType = strtolower((string) $request->header('Content-Type', ''));
+        if (!str_contains($contentType, 'application/json')) {
+            throw new \RuntimeException('Webmail bridge requires JSON.');
+        }
+
+        $requestHost = $this->normalizedAuthority((string) $request->header('Host', ''));
+        if ($requestHost === '') {
+            throw new \RuntimeException('Missing request host.');
+        }
+
+        $origin = trim((string) $request->header('Origin', ''));
+        $referer = trim((string) $request->header('Referer', ''));
+        if ($origin === '' && $referer === '') {
+            throw new \RuntimeException('Missing same-origin proof.');
+        }
+
+        if ($origin !== '' && !$this->isSameOriginUrl($origin, $requestHost)) {
+            throw new \RuntimeException('Invalid webmail bridge origin.');
+        }
+
+        if ($origin === '' && $referer !== '' && !$this->isSameOriginUrl($referer, $requestHost)) {
+            throw new \RuntimeException('Invalid webmail bridge referer.');
+        }
+    }
+
+    private function isSameOriginUrl(string $url, string $requestHost): bool
+    {
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return false;
+        }
+
+        $port = parse_url($url, PHP_URL_PORT);
+        $authority = $host . (is_int($port) ? ':' . $port : '');
+
+        return $this->normalizedAuthority($authority) === $requestHost;
+    }
+
+    private function normalizedAuthority(string $authority): string
+    {
+        $authority = strtolower(trim($authority));
+        if ($authority === '' || preg_match('/[\x00-\x1F\x7F]/', $authority) === 1) {
+            return '';
+        }
+
+        if (str_starts_with($authority, '[')) {
+            if (preg_match('/\A\[([0-9a-f:.]+)\](?::([0-9]{1,5}))?\z/i', $authority, $matches) !== 1) {
+                return '';
+            }
+
+            $port = $this->normalizedPort($matches[2] ?? null);
+            if ($port === null) {
+                return '';
+            }
+
+            return '[' . $matches[1] . ']' . $port;
+        }
+
+        if (preg_match('/\A([a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)(?::([0-9]{1,5}))?\z/i', $authority, $matches) !== 1) {
+            return '';
+        }
+
+        $port = $this->normalizedPort($matches[2] ?? null);
+        if ($port === null) {
+            return '';
+        }
+
+        return $matches[1] . $port;
+    }
+
+    private function normalizedPort(mixed $port): ?string
+    {
+        if ($port === null || $port === '') {
+            return '';
+        }
+
+        $portNumber = filter_var($port, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => 65535],
+        ]);
+
+        return is_int($portNumber) ? ':' . $portNumber : null;
     }
 }

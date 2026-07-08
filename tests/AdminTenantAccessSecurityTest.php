@@ -87,4 +87,33 @@ final class AdminTenantAccessSecurityTest extends TestCase
         $this->assertStringContainsString('$visibleItems = array_values(array_filter($items', $layout);
         $this->assertStringContainsString('if ($visibleItems === [])', $layout);
     }
+
+    public function test_admin_login_redirect_uses_permission_aware_landing_page(): void
+    {
+        $source = (string) file_get_contents(__DIR__ . '/../src/Http/Controllers/AdminAuthController.php');
+
+        $this->assertStringContainsString('adminLandingPath()', $source);
+        $this->assertStringContainsString("can(\$actor, 'dashboard.view')", $source);
+        $this->assertStringContainsString("can(\$actor, 'security.view')", $source);
+    }
+
+    public function test_domain_admin_is_not_shown_tenant_wide_quick_actions(): void
+    {
+        $files = [
+            '/../src/Http/Controllers/AdminConfigDeploymentController.php',
+            '/../src/Http/Controllers/AdminDashboardController.php',
+            '/../src/Http/Controllers/AdminDomainController.php',
+            '/../src/Http/Controllers/AdminMailboxController.php',
+            '/../src/Http/Controllers/AdminPackageController.php',
+            '/../src/Http/Controllers/AdminRoutingController.php',
+            '/../src/Http/Controllers/AdminSecurityController.php',
+            '/../src/Http/Controllers/AdminTenantController.php',
+            '/../src/Http/Controllers/Traits/AdminWebLayoutTrait.php',
+        ];
+
+        foreach ($files as $file) {
+            $source = (string) file_get_contents(__DIR__ . $file);
+            $this->assertStringNotContainsString("['super_admin', 'tenant_admin', 'domain_admin']", $source, $file);
+        }
+    }
 }

@@ -134,6 +134,8 @@ final class ConfigRendererTest extends TestCase
             null,
             $packages,
             $dkimKeys,
+            null,
+            '587',
         );
         $draft = $renderer->render();
         $extras = [];
@@ -146,7 +148,7 @@ final class ConfigRendererTest extends TestCase
         $this->assertStringContainsString('552 MailPanel policy: tenant quota exceeded', $draft['content']);
         $this->assertStringContainsString('MailPanel policy: unknown local domain', $draft['content']);
         $this->assertStringContainsString('eq{$authenticated_id}{}', $draft['content']);
-        $this->assertCount(24, $draft['extras']);
+        $this->assertCount(28, $draft['extras']);
         $this->assertStringContainsString('sales@example.test:admin@example.test', $extras['allowed_senders.map']);
         $this->assertStringNotContainsString('evil@example.test', $extras['allowed_senders.map']);
         $this->assertStringNotContainsString('injected:1', $extras['allowed_senders.map']);
@@ -174,10 +176,13 @@ final class ConfigRendererTest extends TestCase
         $this->assertStringContainsString('mail.example.test:' . str_replace('\\', '/', $sniRoot) . '/mail.example.test/privkey.pem', str_replace('\\', '/', $extras['tls_privatekeys.map']));
         $this->assertStringContainsString('MAIN_TLS_CERTIFICATE = ${lookup{${sg{$tls_in_sni}{[^A-Za-z0-9.-]}{}}}lsearch{/etc/exim4/mailpanel/tls_certificates.map}{$value}{/etc/exim4/ssl/mailpanel.pem}}', $extras['exim4.conf.localmacros.managed']);
         $this->assertStringContainsString('MAIN_TLS_PRIVATEKEY = ${lookup{${sg{$tls_in_sni}{[^A-Za-z0-9.-]}{}}}lsearch{/etc/exim4/mailpanel/tls_privatekeys.map}{$value}{/etc/exim4/ssl/mailpanel.key}}', $extras['exim4.conf.localmacros.managed']);
+        $this->assertStringContainsString('MAIN_ACL_CHECK_MAIL = acl_mailpanel_check_mail', $extras['exim4.conf.localmacros.managed']);
+        $this->assertStringContainsString('acl_mailpanel_check_mail:', $extras['mailpanel-acl-mail.conf']);
+        $this->assertStringContainsString('sender address is not allowed for this mailbox', $extras['mailpanel-acl-mail.conf']);
         $this->assertStringContainsString('daemon_smtp_ports = 25 : 465 : 587', $extras['exim4.conf.localmacros.managed']);
         $this->assertStringContainsString('driver = dovecot', $extras['mailpanel-auth.conf']);
         $this->assertStringContainsString('received_port', $extras['mailpanel-auth.conf']);
-        $this->assertStringContainsString('^(?:465|587)$', $extras['mailpanel-auth.conf']);
+        $this->assertStringContainsString('^(?:587)$', $extras['mailpanel-auth.conf']);
     }
 
     public function test_dovecot_renderer_contains_vmail_root(): void

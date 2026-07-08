@@ -64,6 +64,63 @@ final class SuperAdminServiceTest extends TestCase
         $this->assertCount(1, $history);
     }
 
+    public function test_security_lock_blocks_self_lock_and_can_be_cleared(): void
+    {
+        $this->requireSqliteDriver();
+        $database = $this->makeDatabase();
+        $database->connection()->exec(
+            "INSERT INTO users (id, tenant_id, role, name, email, linux_username, password_hash, ssh_enabled, ssh_sudo_enabled, force_password_change, created_at, updated_at)
+             VALUES
+             (7, NULL, 'super_admin', 'Ops', 'ops@example.test', 'mp-admin-ops', '{BLF-CRYPT}\$2y\$10\$abcdefghijklmnopqrstuv12345678901234567890123456', 1, 1, 0, NOW(), NOW()),
+             (8, NULL, 'super_admin', 'Peer', 'peer@example.test', 'mp-admin-peer', '{BLF-CRYPT}\$2y\$10\$abcdefghijklmnopqrstuv12345678901234567890123456', 1, 0, 0, NOW(), NOW())"
+        );
+
+        $service = new SuperAdminService(
+            new UserRepository($database),
+            new UserPasswordHistoryRepository($database),
+            $this->createMock(SuperAdminLinuxAccountManager::class),
+            new AuditLogService($database),
+            new PasswordPolicyService(),
+            new PasswordHashingService('bcrypt')
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $service->setSecurityLock(7, true, 7);
+    }
+
+    public function test_security_lock_toggle_updates_user_and_audit_log(): void
+    {
+        $this->requireSqliteDriver();
+        $database = $this->makeDatabase();
+        $database->connection()->exec(
+            "INSERT INTO users (id, tenant_id, role, name, email, linux_username, password_hash, ssh_enabled, ssh_sudo_enabled, force_password_change, created_at, updated_at)
+             VALUES
+             (7, NULL, 'super_admin', 'Ops', 'ops@example.test', 'mp-admin-ops', '{BLF-CRYPT}\$2y\$10\$abcdefghijklmnopqrstuv12345678901234567890123456', 1, 1, 0, NOW(), NOW()),
+             (8, NULL, 'super_admin', 'Peer', 'peer@example.test', 'mp-admin-peer', '{BLF-CRYPT}\$2y\$10\$abcdefghijklmnopqrstuv12345678901234567890123456', 1, 0, 0, NOW(), NOW())"
+        );
+
+        $service = new SuperAdminService(
+            new UserRepository($database),
+            new UserPasswordHistoryRepository($database),
+            $this->createMock(SuperAdminLinuxAccountManager::class),
+            new AuditLogService($database),
+            new PasswordPolicyService(),
+            new PasswordHashingService('bcrypt')
+        );
+
+        $locked = $service->setSecurityLock(8, true, 7);
+        $this->assertNotEmpty($locked['security_locked_at']);
+        $this->assertSame('manual_super_admin_lock', $locked['security_lock_reason']);
+
+        $unlocked = $service->setSecurityLock(8, false, 7);
+        $this->assertEmpty($unlocked['security_locked_at']);
+        $this->assertEmpty($unlocked['security_lock_reason']);
+
+        $actions = $database->connection()->query('SELECT action FROM audit_logs ORDER BY id')->fetchAll(PDO::FETCH_COLUMN);
+        $this->assertContains('super_admin.security_locked', $actions);
+        $this->assertContains('super_admin.security_unlocked', $actions);
+    }
+
     private function makeDatabase(): Database
     {
         $this->sqlitePath = sys_get_temp_dir() . '/mailpanel-super-admin-' . bin2hex(random_bytes(4)) . '.sqlite';
@@ -93,6 +150,9 @@ final class SuperAdminServiceTest extends TestCase
                 totp_pending_secret TEXT NULL,
                 totp_enabled INTEGER NOT NULL DEFAULT 0,
                 totp_confirmed_at TEXT NULL,
+                totp_grace_login_count INTEGER NOT NULL DEFAULT 0,
+                security_locked_at TEXT NULL,
+                security_lock_reason TEXT NULL,
                 created_at TEXT NULL,
                 updated_at TEXT NULL,
                 deleted_at TEXT NULL

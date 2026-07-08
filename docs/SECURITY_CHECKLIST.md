@@ -35,6 +35,7 @@
 - [x] Virtual users cho mailbox
 - [x] SQL-backed auth/quota groundwork
 - [x] TLS/default cert + SNI inventory groundwork
+- [x] Fail2ban jail baseline cho Dovecot, Exim SMTP AUTH, Exim reject và webmail auth
 - [ ] Outbound anomaly detection đầy đủ
 - [ ] Open relay simulation test
 - [ ] Alias send-policy enforcement đầy đủ

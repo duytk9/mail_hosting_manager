@@ -59,7 +59,7 @@ final class CoreErrorResponseTest extends TestCase
         $this->assertStringContainsString('C&#243; l&#7895;i x&#7843;y ra', $output);
         $this->assertStringContainsString('H&#7879; th&#7889;ng &#273;ang g&#7863;p l&#7895;i n&#7897;i b&#7897;.', $output);
         $this->assertStringNotContainsString('Secret123', $output);
-        $this->assertStringNotContainsString('Lá»', $output);
+        $this->assertStringNotContainsString(hex2bin('4cc3a1c2bb'), $output);
         $this->assertStringNotContainsString('CÃ', $output);
         $this->assertStringNotContainsString('L?i', $output);
     }

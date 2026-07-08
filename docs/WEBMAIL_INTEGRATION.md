@@ -22,8 +22,11 @@
 ## Fail2ban
 - Canonical jail: `webmail-auth`
 - Canonical filter: `mailpanel-webmail-auth`
-- Default auth log path:
+- Auth log path is controlled by `WEBMAIL_LOG_PATH`.
+- Common auth log paths:
+  - `/var/log/roundcube/userlogins.log`
   - `/var/www/webmail/data/_data_/_default_/logs/auth.log`
+- After changing `WEBMAIL_LOG_PATH`, generate/apply a fresh `fail2ban` config version.
 
 ## Deployment
 - Ensure the webmail client is already installed at `/var/www/webmail`

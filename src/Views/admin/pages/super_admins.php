@@ -7,11 +7,13 @@ $superAdminsPagination = $superAdminsPagination ?? [];
 $filters = $filters ?? [];
 $superAdminIpAllowlist = $superAdminIpAllowlist ?? [];
 $currentClientIp = $currentClientIp ?? '';
+$currentAdminId = (int) ($currentAdminId ?? 0);
 ?>
 <section class="metrics-grid">
     <?= $view->render('admin/components/metric_card.php', ['label' => 'Quản trị viên', 'value' => count($superAdmins), 'hint' => 'Đang hiển thị']) ?>
     <?= $view->render('admin/components/metric_card.php', ['label' => 'Cho phép SSH', 'value' => count(array_filter($superAdmins, static fn (array $item): bool => !empty($item['ssh_enabled']))), 'hint' => 'Đang bật']) ?>
     <?= $view->render('admin/components/metric_card.php', ['label' => 'Mật khẩu Sudo', 'value' => count(array_filter($superAdmins, static fn (array $item): bool => !empty($item['ssh_sudo_enabled']))), 'hint' => 'Đang bật']) ?>
+    <?= $view->render('admin/components/metric_card.php', ['label' => 'Đang khóa', 'value' => count(array_filter($superAdmins, static fn (array $item): bool => !empty($item['security_locked_at']))), 'hint' => 'Không cho login']) ?>
 </section>
 
 <?= $view->render('admin/components/filter_toolbar.php', [
@@ -139,6 +141,7 @@ $currentClientIp = $currentClientIp ?? '';
                         <th>Tên</th>
                         <th>Linux username</th>
                         <th>Recovery Email</th>
+                        <th>Trạng thái</th>
                         <th>SSH</th>
                         <th>Sudo</th>
                         <?php if ($canAccess('super_admins.update') || $canAccess('super_admins.delete')): ?>
@@ -157,6 +160,13 @@ $currentClientIp = $currentClientIp ?? '';
                             </td>
                             <td><code class="selectable"><?= htmlspecialchars((string) ($admin['linux_username'] ?? '-'), ENT_QUOTES, 'UTF-8') ?></code></td>
                             <td><?= htmlspecialchars((string) ($admin['email'] ?? '-'), ENT_QUOTES, 'UTF-8') ?></td>
+                            <td>
+                                <?php if (!empty($admin['security_locked_at'])): ?>
+                                    <span class="badge disabled">Đang khóa</span>
+                                <?php else: ?>
+                                    <span class="badge enabled">Hoạt động</span>
+                                <?php endif; ?>
+                            </td>
                             <td><?= !empty($admin['ssh_enabled']) ? '<span class="badge enabled">Bật</span>' : '<span class="badge disabled">Tắt</span>' ?></td>
                             <td><?= !empty($admin['ssh_sudo_enabled']) ? '<span class="badge enabled">Bật</span>' : '<span class="badge disabled">Tắt</span>' ?></td>
                             
@@ -196,6 +206,18 @@ $currentClientIp = $currentClientIp ?? '';
                                                     <input name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="OTP nếu có">
                                                     <button class="action-link" type="submit"><?= empty($admin['ssh_sudo_enabled']) ? 'Bật Sudo' : 'Tắt Sudo' ?></button>
                                                 </form>
+
+                                                <?php if ((int) $admin['id'] !== $currentAdminId): ?>
+                                                    <form method="post" action="/admin/super-admins" data-confirm="<?= htmlspecialchars(empty($admin['security_locked_at']) ? 'Khóa đăng nhập panel cho tài khoản này?' : 'Mở khóa đăng nhập panel cho tài khoản này?', ENT_QUOTES, 'UTF-8') ?>">
+                                                        <input type="hidden" name="_csrf" value="<?= htmlspecialchars((string) $csrfToken, ENT_QUOTES, 'UTF-8') ?>">
+                                                        <input type="hidden" name="_intent" value="toggle_security_lock">
+                                                        <input type="hidden" name="user_id" value="<?= (int) $admin['id'] ?>">
+                                                        <input type="hidden" name="locked" value="<?= empty($admin['security_locked_at']) ? '1' : '0' ?>">
+                                                        <input name="current_password" type="password" required autocomplete="current-password" placeholder="Mật khẩu hiện tại">
+                                                        <input name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="OTP nếu có">
+                                                        <button class="action-link <?= empty($admin['security_locked_at']) ? 'action-link-danger' : '' ?>" type="submit"><?= empty($admin['security_locked_at']) ? 'Khóa tài khoản' : 'Mở khóa tài khoản' ?></button>
+                                                    </form>
+                                                <?php endif; ?>
                                             <?php endif; ?>
 
                                             <?php if ($canAccess('super_admins.delete')): ?>

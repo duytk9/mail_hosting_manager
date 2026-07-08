@@ -52,6 +52,31 @@ final class UserRepository extends AbstractPdoRepository
         );
     }
 
+    public function findAdminByLogin(string $login): ?array
+    {
+        $login = strtolower(trim($login));
+        if ($login === '') {
+            return null;
+        }
+
+        return $this->fetchOne(
+            'SELECT * FROM users
+             WHERE deleted_at IS NULL
+               AND role IN (:super_admin, :tenant_admin, :domain_admin, :support_readonly)
+               AND (LOWER(email) = :email_login OR LOWER(linux_username) = :linux_login)
+             ORDER BY id DESC
+             LIMIT 1',
+            [
+                'super_admin' => 'super_admin',
+                'tenant_admin' => 'tenant_admin',
+                'domain_admin' => 'domain_admin',
+                'support_readonly' => 'support_readonly',
+                'email_login' => $login,
+                'linux_login' => $login,
+            ]
+        );
+    }
+
     public function create(array $data): array
     {
         $payload = $data + [
@@ -158,6 +183,45 @@ final class UserRepository extends AbstractPdoRepository
         );
     }
 
+    public function incrementTotpGraceLoginCount(int $id): int
+    {
+        $this->execute(
+            'UPDATE users SET totp_grace_login_count = COALESCE(totp_grace_login_count, 0) + 1, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            ['id' => $id]
+        );
+
+        $row = $this->fetchOne(
+            'SELECT totp_grace_login_count FROM users WHERE id = :id AND deleted_at IS NULL',
+            ['id' => $id]
+        );
+
+        return (int) ($row['totp_grace_login_count'] ?? 0);
+    }
+
+    public function resetTotpGraceLoginCount(int $id): void
+    {
+        $this->execute(
+            'UPDATE users SET totp_grace_login_count = 0, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            ['id' => $id]
+        );
+    }
+
+    public function lockForSecurity(int $id, string $reason): void
+    {
+        $this->execute(
+            'UPDATE users SET security_locked_at = NOW(), security_lock_reason = :reason, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            ['id' => $id, 'reason' => substr($reason, 0, 100)]
+        );
+    }
+
+    public function clearSecurityLock(int $id): void
+    {
+        $this->execute(
+            'UPDATE users SET security_locked_at = NULL, security_lock_reason = NULL, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            ['id' => $id]
+        );
+    }
+
     public function countActiveTenantAdmins(int $tenantId): int
     {
         $result = $this->fetchOne(
@@ -179,7 +243,7 @@ final class UserRepository extends AbstractPdoRepository
     public function enableTotp(int $id, string $secret): void
     {
         $this->execute(
-            'UPDATE users SET totp_secret = :secret, totp_pending_secret = NULL, totp_enabled = 1, totp_confirmed_at = NOW(), updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            'UPDATE users SET totp_secret = :secret, totp_pending_secret = NULL, totp_enabled = 1, totp_confirmed_at = NOW(), totp_grace_login_count = 0, security_locked_at = NULL, security_lock_reason = NULL, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
             ['id' => $id, 'secret' => $secret]
         );
     }
@@ -187,7 +251,7 @@ final class UserRepository extends AbstractPdoRepository
     public function disableTotp(int $id): void
     {
         $this->execute(
-            'UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled = 0, totp_confirmed_at = NULL, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
+            'UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled = 0, totp_confirmed_at = NULL, totp_grace_login_count = 0, updated_at = NOW() WHERE id = :id AND deleted_at IS NULL',
             ['id' => $id]
         );
     }

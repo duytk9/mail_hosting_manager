@@ -52,6 +52,14 @@ final class TotpService
         );
     }
 
+    /**
+     * @return array{svg:string,data_uri:string,version:int,size:int}
+     */
+    public function qrCode(string $otpauthUri): array
+    {
+        return (new QrCodeSvg())->render($otpauthUri);
+    }
+
     public function verify(string $secret, string $code, ?int $timestamp = null): bool
     {
         try {

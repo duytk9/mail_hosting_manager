@@ -71,4 +71,20 @@ final class AuthorizationServiceTest extends TestCase
         $this->assertFalse($service->can($actor, 'api_tokens.create'));
         $this->assertFalse($service->can($actor, 'quota.update'));
     }
+
+    public function test_domain_admin_is_not_tenant_wide_until_domain_scoping_exists(): void
+    {
+        $service = new AuthorizationService();
+        $actor = new Actor(14, 'domain_admin', 5);
+
+        $this->assertTrue($service->can($actor, 'security.view'));
+        $this->assertTrue($service->can($actor, 'security.update'));
+        $this->assertFalse($service->can($actor, 'dashboard.view'));
+        $this->assertFalse($service->can($actor, 'domains.view'));
+        $this->assertFalse($service->can($actor, 'domains.create'));
+        $this->assertFalse($service->can($actor, 'mailboxes.create'));
+        $this->assertFalse($service->can($actor, 'aliases.create'));
+        $this->assertFalse($service->can($actor, 'forwards.create'));
+        $this->assertFalse($service->can($actor, 'quota.update'));
+    }
 }

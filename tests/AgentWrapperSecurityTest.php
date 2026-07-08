@@ -47,4 +47,14 @@ final class AgentWrapperSecurityTest extends TestCase
         $this->assertStringContainsString('message_file_bytes(mailbox_path)', $this->source);
         $this->assertStringContainsString('"used_mb": int(math.ceil(used_bytes / 1048576))', $this->source);
     }
+
+    public function test_exim_mail_acl_is_versioned_and_injected_before_mail_from_acceptance(): void
+    {
+        $this->assertStringContainsString('EXIM_ACL_MARKER_BEGIN="# BEGIN MAILPANEL ACL"', $this->source);
+        $this->assertStringContainsString('strip_managed_acl()', $this->source);
+        $this->assertStringContainsString('EXIM_ACL_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-acl-mail.conf"', $this->source);
+        $this->assertStringContainsString('acl_path = Path(sys.argv[5])', $this->source);
+        $this->assertStringContainsString('missing \'begin acl\' in exim template', $this->source);
+        $this->assertStringContainsString('install -o root -g root -m 0644 "$EXIM_ACL_SNIPPET" /etc/exim4/mailpanel/acl-mail.conf', $this->source);
+    }
 }

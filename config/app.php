@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+require_once dirname(__DIR__) . '/src/Support/SafePath.php';
 require_once dirname(__DIR__) . '/src/Support/AppSecuritySettingsStore.php';
 
 $appRoot = dirname(__DIR__);
@@ -53,8 +54,20 @@ $safeSessionTimeout = static function (mixed $value): int {
     return max(60, min(86400, $seconds));
 };
 
+$runtimePortalDomain = strtolower(trim((string) ($runtimeSecuritySettings['portal_domain'] ?? '')));
 $baseUrl = (string) ($_ENV['APP_URL'] ?? 'http://127.0.0.1:8080');
+if ($runtimePortalDomain !== '') {
+    $baseUrl = 'https://' . $runtimePortalDomain;
+}
 $baseUrlScheme = (string) (parse_url($baseUrl, PHP_URL_SCHEME) ?: 'http');
+$baseUrlHost = strtolower((string) (parse_url($baseUrl, PHP_URL_HOST) ?: 'localhost'));
+$defaultMailFrom = $baseUrlHost !== 'localhost' ? 'no-reply@' . $baseUrlHost : 'no-reply@localhost';
+$runtimePasswordReset = is_array($runtimeSecuritySettings['password_reset'] ?? null)
+    ? $runtimeSecuritySettings['password_reset']
+    : [];
+$runtimePasswordResetMail = is_array($runtimePasswordReset['mail'] ?? null)
+    ? $runtimePasswordReset['mail']
+    : [];
 $appEnv = strtolower(trim((string) ($_ENV['APP_ENV'] ?? 'local'))) ?: 'local';
 $appKey = trim((string) ($_ENV['APP_KEY'] ?? ''));
 if ($appKey !== '' && preg_match('/[\x00-\x1F\x7F]/', $appKey) === 1) {
@@ -109,6 +122,31 @@ return [
             'window_seconds' => (int) ($_ENV['RATE_LIMIT_MAILBOX_PASSWORD_CHANGE_WINDOW_SECONDS'] ?? 900),
         ],
     ],
+    'password_reset' => [
+        'ttl_seconds' => max(300, min(3600, (int) ($runtimePasswordReset['ttl_seconds'] ?? ($_ENV['PASSWORD_RESET_TTL_SECONDS'] ?? 3600)))),
+        'rate_limit' => [
+            'max_attempts' => (int) ($_ENV['RATE_LIMIT_PASSWORD_RESET_MAX_ATTEMPTS'] ?? 5),
+            'window_seconds' => (int) ($_ENV['RATE_LIMIT_PASSWORD_RESET_WINDOW_SECONDS'] ?? 900),
+        ],
+        'complete_rate_limit' => [
+            'max_attempts' => (int) ($_ENV['RATE_LIMIT_PASSWORD_RESET_COMPLETE_MAX_ATTEMPTS'] ?? 8),
+            'window_seconds' => (int) ($_ENV['RATE_LIMIT_PASSWORD_RESET_COMPLETE_WINDOW_SECONDS'] ?? 900),
+        ],
+        'mail' => [
+            'from_email' => $runtimePasswordResetMail['from_email'] ?? ($_ENV['PASSWORD_RESET_FROM_EMAIL'] ?? $defaultMailFrom),
+            'from_name' => $runtimePasswordResetMail['from_name'] ?? ($_ENV['PASSWORD_RESET_FROM_NAME'] ?? 'MailPanel'),
+            'subject' => $runtimePasswordResetMail['subject'] ?? ($_ENV['PASSWORD_RESET_SUBJECT'] ?? 'Đặt lại mật khẩu MailPanel'),
+            'transport' => $runtimePasswordResetMail['transport'] ?? ($_ENV['PASSWORD_RESET_MAIL_TRANSPORT'] ?? 'mail'),
+            'smtp' => $runtimePasswordResetMail['smtp'] ?? [
+                'host' => $_ENV['PASSWORD_RESET_SMTP_HOST'] ?? '',
+                'port' => (int) ($_ENV['PASSWORD_RESET_SMTP_PORT'] ?? 587),
+                'encryption' => $_ENV['PASSWORD_RESET_SMTP_ENCRYPTION'] ?? 'starttls',
+                'username' => $_ENV['PASSWORD_RESET_SMTP_USERNAME'] ?? '',
+                'password_encrypted' => '',
+                'timeout_seconds' => (int) ($_ENV['PASSWORD_RESET_SMTP_TIMEOUT_SECONDS'] ?? 15),
+            ],
+        ],
+    ],
     'password_policy' => [
         'min_length' => (int) ($_ENV['PASSWORD_MIN_LENGTH'] ?? 12),
         'require_uppercase' => filter_var($_ENV['PASSWORD_REQUIRE_UPPERCASE'] ?? true, FILTER_VALIDATE_BOOL),
@@ -123,6 +161,7 @@ return [
         'issuer' => $_ENV['TOTP_ISSUER'] ?? 'MailPanel',
         'window' => (int) ($_ENV['TOTP_WINDOW'] ?? 1),
         'encryption_key' => $_ENV['TOTP_ENCRYPTION_KEY'] ?? ($_ENV['APP_KEY'] ?? ''),
+        'grace_logins' => max(1, min(30, (int) ($_ENV['ADMIN_TOTP_GRACE_LOGINS'] ?? 5))),
     ],
     'admin_auth' => [
         'mode' => $_ENV['ADMIN_AUTH_MODE'] ?? 'hybrid',

@@ -37,18 +37,16 @@ bantime = 1h
 
 [exim-smtp-auth]
 enabled = true
-backend = systemd
 filter = mailpanel-exim-auth
-journalmatch = _SYSTEMD_UNIT=exim4.service
+logpath = /var/log/exim4/mainlog
 maxretry = 5
 findtime = 10m
 bantime = 1h
 
 [exim-reject]
 enabled = true
-backend = systemd
 filter = mailpanel-exim-reject
-journalmatch = _SYSTEMD_UNIT=exim4.service
+logpath = /var/log/exim4/mainlog
 maxretry = 5
 findtime = 10m
 bantime = 1h
@@ -75,15 +73,15 @@ CONF;
             'extras' => [
                 [
                     'path' => $generatedRoot . '/fail2ban/filter.d/mailpanel-dovecot.conf',
-                    'content' => "[Definition]\nfailregex = ^.*rip=<HOST>.*auth failed.*$\nignoreregex =\n",
+                    'content' => "[Definition]\nfailregex = ^.*(?:auth failed|invalid credentials|Password mismatch).*rip=<HOST>.*$\n            ^.*rip=<HOST>.*(?:auth failed|invalid credentials|Password mismatch).*$\nignoreregex =\n",
                 ],
                 [
                     'path' => $generatedRoot . '/fail2ban/filter.d/mailpanel-exim-auth.conf',
-                    'content' => "[Definition]\nfailregex = ^.*SMTP authentication error.*\\[<HOST>\\].*$\nignoreregex =\n",
+                    'content' => "[Definition]\nfailregex = ^.*authenticator failed for .*\\[<HOST>\\]: 535 Incorrect authentication data.*$\n            ^.*SMTP authentication error.*\\[<HOST>\\].*$\nignoreregex =\n",
                 ],
                 [
                     'path' => $generatedRoot . '/fail2ban/filter.d/mailpanel-exim-reject.conf',
-                    'content' => "[Definition]\nfailregex = ^.*rejected RCPT.*\\[<HOST>\\].*$\nignoreregex =\n",
+                    'content' => "[Definition]\nfailregex = ^.*\\[<HOST>\\].*rejected RCPT.*(?:relay not permitted|Sender verify failed|Unknown user|Unrouteable address).*$\n            ^.*rejected RCPT.*\\[<HOST>\\].*$\nignoreregex =\n",
                 ],
                 [
                     'path' => $generatedRoot . '/fail2ban/filter.d/mailpanel-webmail-auth.conf',

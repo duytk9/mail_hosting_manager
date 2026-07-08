@@ -30,4 +30,15 @@ final class AdminPasswordResetSecurityTest extends TestCase
         $this->assertStringNotContainsString('Mật khẩu mới là: [', $mailboxController);
         $this->assertStringNotContainsString('Mật khẩu mới là: [', $tenantController);
     }
+
+    public function test_secure_admin_account_utility_uses_app_root_and_clears_security_lock_on_reset(): void
+    {
+        $script = (string) file_get_contents(__DIR__ . '/../scripts/admin_account.php');
+
+        $this->assertStringContainsString('$appRoot = dirname(__DIR__);', $script);
+        $this->assertStringContainsString("require_once \$appRoot . '/vendor/autoload.php';", $script);
+        $this->assertStringContainsString('$users->clearSecurityLock((int) $user[\'id\']);', $script);
+        $this->assertStringContainsString('$users->resetTotpGraceLoginCount((int) $user[\'id\']);', $script);
+        $this->assertStringNotContainsString("__DIR__ . '/vendor/autoload.php'", $script);
+    }
 }

@@ -27,10 +27,11 @@ final class AdminSuperAdminCompactUiTest extends TestCase
         $this->assertStringNotContainsString('body.role-super_admin .table-note', $css);
     }
 
-    public function test_critical_security_warning_stays_visible_for_super_admin(): void
+    public function test_critical_portal_warning_stays_visible_for_super_admin(): void
     {
-        $securityView = (string) file_get_contents(__DIR__ . '/../src/Views/admin/pages/security.php');
+        $portalSettingsView = (string) file_get_contents(__DIR__ . '/../src/Views/admin/pages/portal_settings.php');
 
-        $this->assertStringContainsString('<p class="critical-copy">Thay đổi domain đăng nhập quản trị', $securityView);
+        $this->assertStringContainsString('Portal Domain', $portalSettingsView);
+        $this->assertStringContainsString('DNS A record', $portalSettingsView);
     }
 }

@@ -33,6 +33,7 @@ Sau đó đăng nhập portal quản trị, tạo package/tenant/domain/mailbox,
 - `docs/INSTALL.md`: hướng dẫn cài đặt/cấu hình từ đầu đến cuối.
 - `docs/ARCHITECTURE.md`: kiến trúc hệ thống.
 - `docs/SECURITY_CHECKLIST.md`: checklist bảo mật.
+- `docs/FAIL2BAN.md`: vận hành, kiểm thử và troubleshooting Fail2ban.
 - `docs/ACME_TLS.md`: ACME/TLS/SNI.
 - `docs/WEBMAIL_INTEGRATION.md`: tích hợp webmail.
 - `docs/CODEBASE_MAP.md`: bản đồ source code.

@@ -40,6 +40,7 @@ use MailPanel\Repositories\Pdo\ForwardRepository;
 use MailPanel\Repositories\Pdo\MailboxPasswordHistoryRepository;
 use MailPanel\Repositories\Pdo\MailboxRepository;
 use MailPanel\Repositories\Pdo\PackageRepository;
+use MailPanel\Repositories\Pdo\PasswordResetTokenRepository;
 use MailPanel\Repositories\Pdo\QuotaUsageRepository;
 use MailPanel\Repositories\Pdo\TenantPurgeRepository;
 use MailPanel\Repositories\Pdo\TenantRepository;
@@ -73,6 +74,8 @@ use MailPanel\Services\PackageService;
 use MailPanel\Services\NginxConfigRenderer;
 use MailPanel\Services\PasswordHashingService;
 use MailPanel\Services\PasswordPolicyService;
+use MailPanel\Services\PasswordResetMailService;
+use MailPanel\Services\PasswordResetService;
 use MailPanel\Services\QuotaService;
 use MailPanel\Services\RateLimiterService;
 use MailPanel\Services\RspamdConfigRenderer;
@@ -154,6 +157,7 @@ final class ApplicationFactory
         $container->set(MailGroupMemberRepository::class, fn (Container $c) => new MailGroupMemberRepository($c->get(Database::class)));
         $container->set(DkimKeyRepository::class, fn (Container $c) => new DkimKeyRepository($c->get(Database::class)));
         $container->set(UserPasswordHistoryRepository::class, fn (Container $c) => new UserPasswordHistoryRepository($c->get(Database::class)));
+        $container->set(PasswordResetTokenRepository::class, fn (Container $c) => new PasswordResetTokenRepository($c->get(Database::class)));
         $container->set(MailboxPasswordHistoryRepository::class, fn (Container $c) => new MailboxPasswordHistoryRepository($c->get(Database::class)));
 
         $container->set(PackageService::class, fn (Container $c) => new PackageService(
@@ -245,7 +249,8 @@ final class ApplicationFactory
             $c->get(QuotaUsageRepository::class),
             $c->get(PackageRepository::class),
             $c->get(DkimKeyRepository::class),
-            $c->get(ForwardRepository::class)
+            $c->get(ForwardRepository::class),
+            $config->get('mailpanel.exim_auth_ports')
         ));
         $container->set(DovecotConfigRenderer::class, fn (Container $c) => new DovecotConfigRenderer(
             $config->get('mailpanel.generated_root'),
@@ -372,6 +377,23 @@ final class ApplicationFactory
             $c->get(SessionManager::class),
             (string) $config->get('app.key', '')
         ));
+        $container->set(PasswordResetMailService::class, fn () => new PasswordResetMailService(
+            (array) $config->get('app.password_reset.mail', []),
+            (string) $config->get('app.key', '')
+        ));
+        $container->set(PasswordResetService::class, fn (Container $c) => new PasswordResetService(
+            $c->get(UserRepository::class),
+            $c->get(PasswordResetTokenRepository::class),
+            $c->get(UserPasswordHistoryRepository::class),
+            $c->get(PasswordPolicyService::class),
+            $c->get(PasswordHashingService::class),
+            $c->get(SuperAdminLinuxAccountManager::class),
+            $c->get(PasswordResetMailService::class),
+            $c->get(AuditLogService::class),
+            $c->get(RateLimiterService::class),
+            (array) $config->get('app.password_reset', []),
+            (string) $config->get('app.key', '')
+        ));
         $container->set(AppSecuritySettingsService::class, fn (Container $c) => new AppSecuritySettingsService(
             $basePath,
             $config->get('app'),
@@ -458,7 +480,9 @@ final class ApplicationFactory
             $c->get(AuthorizationService::class),
             $c->get(View::class),
             $c->get(UserRepository::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(PasswordResetService::class),
+            (array) $config->get('app', [])
         ));
         $container->set(AdminDashboardController::class, fn (Container $c) => new AdminDashboardController(
             $c->get(SessionManager::class),
@@ -538,7 +562,8 @@ final class ApplicationFactory
             $c->get(View::class),
             $c->get(AuditLogService::class),
             $c->get(AcmeTlsService::class),
-            $c->get(ConfigDeploymentService::class)
+            $c->get(ConfigDeploymentService::class),
+            (array) $config->get('app', [])
         ));
         $container->set(AdminConfigDeploymentController::class, fn (Container $c) => new AdminConfigDeploymentController(
             $c->get(ConfigDeploymentService::class),

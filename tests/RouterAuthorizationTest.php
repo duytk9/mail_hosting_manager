@@ -153,7 +153,7 @@ final class RouterAuthorizationTest extends TestCase
 
         $this->assertStringContainsString('Trang kh&#244;ng t&#7891;n t&#7841;i.', $output);
         $this->assertStringNotContainsString('khÃ', $output);
-        $this->assertStringNotContainsString('tá»', $output);
+        $this->assertStringNotContainsString(hex2bin('74c3a1c2bb'), $output);
         $this->assertStringNotContainsString('kh?ng', $output);
     }
 

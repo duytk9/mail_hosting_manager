@@ -62,6 +62,7 @@ return [
     'exim_tls_certificate' => $_ENV['EXIM_TLS_CERTIFICATE'] ?? '/etc/exim4/ssl/mailpanel.pem',
     'exim_tls_privatekey' => $_ENV['EXIM_TLS_PRIVATEKEY'] ?? '/etc/exim4/ssl/mailpanel.key',
     'exim_submission_ports' => $_ENV['EXIM_SUBMISSION_PORTS'] ?? '25 : 465 : 587',
+    'exim_auth_ports' => $_ENV['EXIM_AUTH_PORTS'] ?? ($_ENV['EXIM_SUBMISSION_AUTH_PORTS'] ?? '465 : 587'),
     'exim_tls_on_connect_ports' => $_ENV['EXIM_TLS_ON_CONNECT_PORTS'] ?? '465',
     'nginx_root' => $_ENV['NGINX_ROOT'] ?? '/opt/mailpanel/public',
     'nginx_server_name' => $_ENV['NGINX_SERVER_NAME'] ?? $appHost,

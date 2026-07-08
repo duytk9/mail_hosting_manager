@@ -60,7 +60,11 @@
   - Sau khi issue/renew, script đồng bộ inventory rồi apply lại `nginx`, `exim`, `dovecot` qua `config_versions`
 - Jail template được render từ generated config
 - Hiện có template cho `dovecot`, `exim-smtp-auth`, `exim-reject`, `webmail-auth`, `sshd` optional
+- `dovecot` dùng backend `systemd` với `journalmatch = _SYSTEMD_UNIT=dovecot.service`
+- `exim-smtp-auth` và `exim-reject` đọc trực tiếp `/var/log/exim4/mainlog` để bắt đúng auth fail, relay test và recipient reject trên Ubuntu/Exim
+- `webmail-auth` đọc đường dẫn cấu hình bởi `WEBMAIL_LOG_PATH`, ví dụ `/var/log/roundcube/userlogins.log`
 - UI/agent chỉ nên expose tham số an toàn như `maxretry`, `findtime`, `bantime`, whitelist
+- Chi tiết vận hành nằm trong `docs/FAIL2BAN.md`
 
 ## Webmail integration
 - Webmail phải chạy tách biệt web admin panel

@@ -37,6 +37,7 @@ final class EximConfigRenderer
         private readonly ?PackageRepository $packages = null,
         private readonly ?DkimKeyRepository $dkimKeys = null,
         private readonly ?ForwardRepository $forwards = null,
+        private readonly string $authPorts = '465 : 587',
     ) {
         $this->tlsInventory = $tlsInventory ?? new TlsCertificateInventory();
     }
@@ -240,17 +241,34 @@ deny
   message = MailPanel policy: unknown local domain
 CONF;
 
+        $mailAcl = <<<CONF
+acl_mailpanel_check_mail:
+  deny
+    authenticated = *
+    condition = \${if and{{!eq{\$authenticated_id}{}}{!eq{\$sender_address}{}}{!eq{\${lc:\$sender_address}}{\${lc:\$authenticated_id}}}{!eq{\${lookup{\${lc:\$sender_address}}lsearch{/etc/exim4/mailpanel/allowed_senders.map}{\$value}{}}}{\${lc:\$authenticated_id}}}}{yes}{no}}
+    message = MailPanel policy: sender address is not allowed for this mailbox
+
+  deny
+    authenticated = *
+    condition = \${if and{{!eq{\$authenticated_id}{}}{!eq{\${lookup{\${lc:\$authenticated_id}}lsearch{/etc/exim4/mailpanel/smtp_submit_enabled.map}{\$value}{}}}{1}}}{yes}{no}}
+    message = MailPanel policy: outbound submission is disabled for this mailbox
+
+  accept
+CONF;
+
         $defaultTlsCertificate = $this->safeAbsoluteConfigPath($this->tlsCertificate, 'TLS certificate path');
         $defaultTlsPrivateKey = $this->safeAbsoluteConfigPath($this->tlsPrivateKey, 'TLS private key path');
         $submissionPorts = $this->safePortList($this->submissionPorts, 'submission ports');
         $tlsOnConnectPorts = $this->safePortList($this->tlsOnConnectPorts, 'TLS-on-connect ports');
-        $authPortsRegex = $this->submissionAuthPortRegex($submissionPorts);
+        $authPorts = $this->safePortList($this->authPorts, 'SMTP AUTH ports');
+        $authPortsRegex = $this->submissionAuthPortRegex($authPorts);
 
         $managedMacros = strtr(<<<'CONF'
 MAIN_TLS_ENABLE = yes
 MAIN_TLS_CERTIFICATE = ${lookup{${sg{$tls_in_sni}{[^A-Za-z0-9.-]}{}}}lsearch{/etc/exim4/mailpanel/tls_certificates.map}{$value}{__DEFAULT_CERTIFICATE__}}
 MAIN_TLS_PRIVATEKEY = ${lookup{${sg{$tls_in_sni}{[^A-Za-z0-9.-]}{}}}lsearch{/etc/exim4/mailpanel/tls_privatekeys.map}{$value}{__DEFAULT_PRIVATEKEY__}}
 MAIN_LOCAL_DOMAINS = @ : $primary_hostname : localhost : localhost.localdomain : lsearch;/etc/exim4/mailpanel/local_domains.map
+MAIN_ACL_CHECK_MAIL = acl_mailpanel_check_mail
 daemon_smtp_ports = __SUBMISSION_PORTS__
 tls_on_connect_ports = __TLS_ON_CONNECT_PORTS__
 CONF, [
@@ -378,6 +396,10 @@ CONF, [
                 [
                     'path' => $generatedRoot . '/exim/exim4.conf.localmacros.managed',
                     'content' => $managedMacros . "\n",
+                ],
+                [
+                    'path' => $generatedRoot . '/exim/mailpanel-acl-mail.conf',
+                    'content' => $mailAcl . "\n",
                 ],
                 [
                     'path' => $generatedRoot . '/exim/mailpanel-router.conf',

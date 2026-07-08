@@ -377,6 +377,41 @@ final class SuperAdminService
         ];
     }
 
+    public function setSecurityLock(int $userId, bool $locked, ?int $actorId = null): array
+    {
+        $user = $this->requireSuperAdmin($userId);
+
+        if ($locked && $actorId !== null && $actorId === $userId) {
+            throw new InvalidArgumentException('You cannot lock the currently logged-in super admin.');
+        }
+
+        if ($locked) {
+            $this->users->lockForSecurity($userId, 'manual_super_admin_lock');
+        } else {
+            $this->users->clearSecurityLock($userId);
+            $this->users->resetTotpGraceLoginCount($userId);
+        }
+
+        $updated = $this->requireSuperAdmin($userId);
+        $this->auditLog->log([
+            'actor_id' => $actorId,
+            'actor_role' => 'super_admin',
+            'action' => $locked ? 'super_admin.security_locked' : 'super_admin.security_unlocked',
+            'target_type' => 'user',
+            'target_id' => $userId,
+            'old_values' => [
+                'security_locked_at' => $user['security_locked_at'] ?? null,
+                'security_lock_reason' => $user['security_lock_reason'] ?? null,
+            ],
+            'new_values' => [
+                'security_locked_at' => $updated['security_locked_at'] ?? null,
+                'security_lock_reason' => $updated['security_lock_reason'] ?? null,
+            ],
+        ]);
+
+        return $updated;
+    }
+
     private function requireSuperAdmin(int $userId): array
     {
         $user = $this->users->find($userId);

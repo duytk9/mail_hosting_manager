@@ -12,7 +12,7 @@ $layoutRoleClass = 'role-' . (preg_replace('/[^a-z0-9_-]+/i', '-', strtolower($l
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/admin.css?v=20260707-sensitivecompact">
+    <link rel="stylesheet" href="/assets/admin.css?v=20260708-form-polish">
 </head>
 <body class="<?= htmlspecialchars($layoutRoleClass, ENT_QUOTES, 'UTF-8') ?>">
 <?php
@@ -21,6 +21,10 @@ $role = $layoutRole;
 $identityLogin = (string) (($identity['linux_username'] ?? '') !== '' ? $identity['linux_username'] : ($identity['email'] ?? ''));
 $identityEmail = (string) ($identity['email'] ?? '');
 $impersonation = is_array($identity['impersonated_by'] ?? null) ? $identity['impersonated_by'] : null;
+$totpGraceRemaining = isset($identity['totp_grace_remaining']) ? max(0, (int) $identity['totp_grace_remaining']) : null;
+$showTotpGraceWarning = empty($identity['totp_enabled'])
+    && $totpGraceRemaining !== null
+    && in_array($role, ['super_admin', 'tenant_admin', 'domain_admin', 'support_readonly'], true);
 $roleLabel = match ($role) {
     'super_admin' => 'Admin level',
     'tenant_admin' => 'User level',
@@ -137,6 +141,13 @@ $menuGroups = [
             'key' => 'security',
             'permission' => 'security.view',
             'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="menu-item__icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>'
+        ],
+        [
+            'label' => 'Cấu hình Portal',
+            'href' => '/admin/portal-settings',
+            'key' => 'portal_settings',
+            'permission' => 'system_settings.view',
+            'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="menu-item__icon"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M8 21h8"></path><path d="M12 18v3"></path><path d="M7 8h10"></path><path d="M7 12h6"></path></svg>'
         ],
         [
             'label' => 'Trạng thái Webmail',
@@ -337,6 +348,12 @@ $menuGroups = [
             <div class="content">
                 <?php if (!empty($flashSuccess)): ?><div class="flash success"><?= htmlspecialchars((string) $flashSuccess, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
                 <?php if (!empty($flashError)): ?><div class="flash error"><?= htmlspecialchars((string) $flashError, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+                <?php if ($showTotpGraceWarning): ?>
+                    <div class="flash warning">
+                        Tài khoản quản trị chưa bật 2FA. Bạn còn <?= (int) $totpGraceRemaining ?> lần đăng nhập không cần OTP trước khi tài khoản bị khóa bảo mật.
+                        <a href="/admin/security#totp-setup">Bật 2FA ngay</a>.
+                    </div>
+                <?php endif; ?>
                 <?php if ($quickActions !== []): ?>
                     <div class="page-action-seed" data-page-action-seed>
                         <?php foreach ($quickActions as $action): ?>

@@ -54,4 +54,17 @@ final class TotpServiceTest extends TestCase
         $this->assertStringStartsWith('otpauth://totp/MailPanel:admin%40example.test', $uri);
         $this->assertStringContainsString('issuer=MailPanel', $uri);
     }
+
+    public function test_totp_qr_code_is_generated_locally_as_svg_data_uri(): void
+    {
+        $service = new TotpService('MailPanel', 1);
+        $uri = $service->otpauthUri('portal.example.test/admin:duytk', 'JBSWY3DPEHPK3PXP');
+        $qr = $service->qrCode($uri);
+
+        $this->assertStringStartsWith('<svg ', $qr['svg']);
+        $this->assertStringStartsWith('data:image/svg+xml;base64,', $qr['data_uri']);
+        $this->assertStringContainsString('<rect', $qr['svg']);
+        $this->assertGreaterThanOrEqual(1, $qr['version']);
+        $this->assertLessThanOrEqual(10, $qr['version']);
+    }
 }

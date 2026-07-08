@@ -395,6 +395,23 @@ systemctl status nginx exim4 dovecot rspamd clamav-daemon fail2ban --no-pager
 ss -lntp | egrep ':(25|80|443|465|587|993|995|4190)\s'
 ```
 
+Kiểm tra Fail2ban:
+
+```bash
+fail2ban-client ping
+fail2ban-client -t
+fail2ban-client status
+fail2ban-client status dovecot
+fail2ban-client status exim-smtp-auth
+fail2ban-client status exim-reject
+fail2ban-client status webmail-auth
+fail2ban-client get exim-smtp-auth logpath
+fail2ban-client get exim-reject logpath
+fail2ban-client get webmail-auth logpath
+```
+
+Kỳ vọng `exim-smtp-auth` và `exim-reject` đọc `/var/log/exim4/mainlog`; `webmail-auth` đọc đúng `WEBMAIL_LOG_PATH`. Xem thêm `docs/FAIL2BAN.md` để test regex bằng log thật.
+
 Kiểm tra SMTP AUTH không bị mở plaintext:
 
 ```bash

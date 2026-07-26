@@ -1,0 +1,62 @@
+# Dependencies
+/vendor/
+
+# Environment & secrets
+/.env
+/.env.*
+!/.env.example
+*.pem
+*.key
+
+# Build / cache
+/.phpunit.result.cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Backups & temp artifacts (NEVER commit - may contain credentials)
+/.codex-backup/
+/.deploy-backups/
+/_backups/
+/TEMP-CODEX-UPLOAD/
+/tmp-sync/
+/_archive/
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# Ad-hoc operational scripts must live in /tools (gitignored), never at repo root.
+# Historically 200+ debug scripts with hardcoded production SSH credentials were
+# committed at the repo root. Do not repeat that.
+/tools/
+/*.py
+/force_deploy.php
+/_apply_exim_version.php
+/_server_phase12.sh
+
+# Runtime state
+*.log
+*.sqlite
+/storage/cache/*
+/storage/logs/*
+/storage/sessions/*
+/storage/generated/*
+/storage/rate_limits/*
+/storage/app_settings/*
+!/storage/cache/.gitkeep
+!/storage/logs/.gitkeep
+!/storage/sessions/.gitkeep
+!/storage/generated/.gitkeep
+!/storage/rate_limits/.gitkeep
+!/storage/app_settings/.gitkeep
+
+# Editor
+/.vscode/
+/.idea/
+
+# Deployment config (contains host details, never commit)
+/deploy/deploy.env
+
+# Pull-deploy config lives at /etc/mailpanel/deploy.conf on the server
+/deploy/deploy.conf

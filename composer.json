@@ -1,0 +1,28 @@
+{
+  "name": "mailpanel/mailpanel",
+  "description": "Multi-tenant enterprise mail control panel MVP",
+  "type": "project",
+  "require": {
+    "php": "^8.3",
+    "ext-pdo": "*",
+    "ext-json": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "MailPanel\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "MailPanel\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit --testdox",
+    "serve": "php -S 127.0.0.1:8080 -t public",
+    "lint": "php -l public/index.php"
+  }
+}

@@ -60,3 +60,6 @@ __pycache__/
 
 # Pull-deploy config lives at /etc/mailpanel/deploy.conf on the server
 /deploy/deploy.conf
+
+# Installer config (host details, never commit)
+/deploy/install.conf

@@ -1,10 +1,53 @@
 # Deployment Runbook
 
-Deployment target: Ubuntu 22.04+, `/opt/mailpanel`.
+Deployment target: Ubuntu 22.04 / 24.04, `/opt/mailpanel`.
 
 This replaces the ad-hoc workflow that used ~288 one-off Python scripts at the
 repo root, 223 of which contained the production root password in plaintext.
 Nothing here stores a credential.
+
+---
+
+## Quick start — fresh server
+
+On a clean Ubuntu box, one command does everything in sections 0–5 below:
+
+```bash
+git clone <your-repo-url> /tmp/mailpanel && cd /tmp/mailpanel
+sudo bash deploy/install.sh
+```
+
+It installs nginx, PHP 8.3, MariaDB, Exim, Dovecot, Rspamd, ClamAV, Fail2ban and
+Roundcube; creates the `vmail` user and the database; generates every secret;
+installs a self-signed certificate so the panel is reachable straight away; sets
+up the privileged agent; runs migrations; creates the first super admin; renders
+and applies the mail service configuration; and opens the firewall.
+
+```bash
+sudo bash deploy/install.sh --check          # preflight only, changes nothing
+sudo bash deploy/install.sh --skip-clamav    # small VPS (ClamAV needs ~1GB)
+sudo bash deploy/install.sh --skip-webmail   # no Roundcube
+sudo bash deploy/install.sh --unattended     # reads deploy/install.conf
+```
+
+It is re-runnable: each step checks whether it is already done.
+
+The admin password is printed once and written to
+`/root/mailpanel-credentials.txt`. Move it to a password manager and delete that
+file. Every other secret lives in `/etc/mailpanel/.env`.
+
+Afterwards:
+
+```bash
+sudo bash deploy/healthcheck.sh
+```
+
+Checks services, ports, permissions, privilege separation, database, migrations,
+TLS expiry and that `/admin/dashboard` redirects when logged out. Every failure
+prints the command that fixes it.
+
+The rest of this document covers the manual path, ongoing deployment, and the
+optional admin hostname split.
 
 ---
 

@@ -13,6 +13,21 @@ install -d -m 0755 /var/lib/mailpanel/generated/nginx /var/lib/mailpanel/generat
 install -d -m 0755 /var/lib/mailpanel/generated/exim /var/lib/mailpanel/generated/active/exim
 install -d -m 0750 /var/lib/mailpanel/generated/dovecot /var/lib/mailpanel/generated/rspamd /var/lib/mailpanel/generated/fail2ban /var/lib/mailpanel/generated/active /var/lib/mailpanel/generated/active/dovecot /var/lib/mailpanel/generated/active/rspamd /var/lib/mailpanel/generated/active/fail2ban
 chown -R "$AGENT_USER":"$AGENT_USER" /var/lib/mailpanel
+
+# The web process renders config drafts into the generated root; the agent then
+# validates and activates them. Chowning the tree to the agent alone left it
+# mode 0750 and unwritable by the web user, so draft generation failed with a
+# permission error.
+#
+# Adding the web user to the agent group and marking the directories setgid
+# (2770) lets both write, and files created by either inherit the shared group.
+# The agent group owns nothing else, so this grants no other access.
+if ! id -nG "$WEB_USER" | tr ' ' '\n' | grep -qx "$AGENT_USER"; then
+  usermod -aG "$AGENT_USER" "$WEB_USER"
+fi
+find /var/lib/mailpanel -type d -exec chmod 2770 {} +
+find /var/lib/mailpanel -type f -exec chmod 0660 {} + 2>/dev/null || true
+
 install -d -m 0755 /var/log/mailpanel
 chown "$AGENT_USER":"$AGENT_USER" /var/log/mailpanel
 touch /var/log/mailpanel/agent.log

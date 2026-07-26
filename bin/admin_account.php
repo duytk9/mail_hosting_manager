@@ -11,14 +11,19 @@ use MailPanel\Services\AuditLogService;
 use MailPanel\Services\PasswordHashingService;
 use MailPanel\Services\PasswordPolicyService;
 
-require_once __DIR__ . '/vendor/autoload.php';
+// This script lives in bin/, so every path must climb one level. It previously
+// used __DIR__ directly, which resolved to bin/vendor/autoload.php and bin/.env
+// and made the whole command unusable.
+$appRoot = dirname(__DIR__);
 
-Environment::load(__DIR__);
+require_once $appRoot . '/vendor/autoload.php';
 
-$config = new Config(__DIR__, [
-    'app' => require __DIR__ . '/config/app.php',
-    'database' => require __DIR__ . '/config/database.php',
-    'mailpanel' => require __DIR__ . '/config/mailpanel.php',
+Environment::load($appRoot);
+
+$config = new Config($appRoot, [
+    'app' => require $appRoot . '/config/app.php',
+    'database' => require $appRoot . '/config/database.php',
+    'mailpanel' => require $appRoot . '/config/mailpanel.php',
 ]);
 
 $database = new Database($config->get('database'));
@@ -36,7 +41,7 @@ if ($command === null || in_array($command, ['-h', '--help', 'help'], true)) {
     exit(0);
 }
 
-if (!in_array($command, ['status', 'reset'], true)) {
+if (!in_array($command, ['status', 'reset', 'create'], true)) {
     fwrite(STDERR, "Unknown command [{$command}].\n\n");
     printUsage();
     exit(1);
@@ -49,6 +54,76 @@ if ($email === '') {
 }
 
 $user = $users->findByEmail($email);
+
+if ($command === 'create') {
+    if ($user !== null) {
+        fwrite(STDERR, "An account already exists for [{$email}]. Use 'reset' to change its password.\n");
+        exit(1);
+    }
+
+    $username = strtolower(trim((string) ($options['username'] ?? '')));
+    if (preg_match('/\A[a-z_][a-z0-9_-]{0,31}\z/', $username) !== 1) {
+        fwrite(STDERR, "Missing or invalid --username. The panel logs in by system username.\n");
+        exit(1);
+    }
+
+    if ($users->findByLinuxUsername($username) !== null) {
+        fwrite(STDERR, "Username [{$username}] is already taken.\n");
+        exit(1);
+    }
+
+    $role = (string) ($options['role'] ?? 'super_admin');
+    if (!in_array($role, ['super_admin', 'support_readonly'], true)) {
+        fwrite(STDERR, "Invalid --role. Only super_admin or support_readonly may be created here.\n");
+        exit(1);
+    }
+
+    $password = readPassword($options);
+    if ($password === '') {
+        fwrite(STDERR, "Missing password. Use --password-stdin, --password-file=<path>, or --password-env=<ENV_NAME>.\n");
+        exit(1);
+    }
+
+    try {
+        $passwordPolicy->assertStrong($password);
+        $hash = $passwordHasher->hash($password);
+
+        $created = $users->create([
+            'tenant_id' => null,
+            'role' => $role,
+            'name' => (string) ($options['name'] ?? 'Administrator'),
+            'email' => $email,
+            'password_hash' => $hash,
+            'linux_username' => $username,
+            'force_password_change' => array_key_exists('force-password-change', $options) ? 1 : 0,
+        ]);
+
+        $history->store((int) $created['id'], null, $hash);
+
+        $auditLog->log([
+            'actor_id' => null,
+            'actor_role' => 'system',
+            'tenant_id' => null,
+            'action' => 'system.admin_account_created',
+            'target_type' => 'user',
+            'target_id' => $created['id'] ?? null,
+            'new_values' => ['email' => $email, 'username' => $username, 'role' => $role],
+        ]);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, $exception->getMessage() . PHP_EOL);
+        exit(1);
+    }
+
+    echo json_encode([
+        'status' => 'created',
+        'id' => (int) ($created['id'] ?? 0),
+        'email' => $email,
+        'username' => $username,
+        'role' => $role,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . PHP_EOL;
+    exit(0);
+}
+
 if ($user === null) {
     fwrite(STDERR, "Admin user not found for [{$email}].\n");
     exit(1);
@@ -202,7 +277,8 @@ function printUsage(): void
 {
     echo <<<TXT
 Usage:
-  php admin_account.php status --email=admin@example.test
+  php bin/admin_account.php create --email=admin@example.test --username=opsadmin --password-stdin [--name='Ops Admin'] [--role=super_admin] [--force-password-change]
+  php bin/admin_account.php status --email=admin@example.test
   printf '%s\n' '<new-strong-password>' | php admin_account.php reset --email=admin@example.test --password-stdin [--disable-totp] [--force-password-change]
   php admin_account.php reset --email=admin@example.test --password-file=/root/mailpanel-admin-password [--disable-totp] [--force-password-change]
   MAILPANEL_TEMP_PASSWORD='<new-strong-password>' php admin_account.php reset --email=admin@example.test --password-env=MAILPANEL_TEMP_PASSWORD

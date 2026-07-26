@@ -1,0 +1,5 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS linux_username VARCHAR(64) NULL AFTER email,
+  ADD COLUMN IF NOT EXISTS ssh_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER linux_username,
+  ADD COLUMN IF NOT EXISTS ssh_sudo_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER ssh_enabled,
+  ADD COLUMN IF NOT EXISTS ssh_public_key TEXT NULL AFTER ssh_sudo_enabled;

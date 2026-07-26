@@ -1,0 +1,828 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ACTION="${1:-}"
+SERVICE="${2:-}"
+ARG1="${3:-}"
+ARG2="${4:-}"
+ARG3="${5:-}"
+ARG4="${6:-}"
+TMP_CONFIG=""
+TMP_INCLUDE=""
+TMP_MACROS=""
+TMP_BASE_MACROS=""
+TMP_TEMPLATE_BASE=""
+TMP_TEMPLATE_RENDERED=""
+TMP_DOVECOT_DIR=""
+EXIM_LOCALMACROS="/etc/exim4/exim4.conf.localmacros"
+EXIM_TEMPLATE="/etc/exim4/exim4.conf.template"
+EXIM_LIVE_INCLUDE="/etc/exim4/mailpanel/check_rcpt_local.acl"
+EXIM_MARKER_BEGIN="# BEGIN MAILPANEL MANAGED"
+EXIM_MARKER_END="# END MAILPANEL MANAGED"
+EXIM_ROUTING_MARKER_BEGIN="# BEGIN MAILPANEL ROUTING"
+EXIM_ROUTING_MARKER_END="# END MAILPANEL ROUTING"
+EXIM_TRANSPORT_MARKER_BEGIN="# BEGIN MAILPANEL TRANSPORT"
+EXIM_TRANSPORT_MARKER_END="# END MAILPANEL TRANSPORT"
+EXIM_AUTH_MARKER_BEGIN="# BEGIN MAILPANEL AUTH"
+EXIM_AUTH_MARKER_END="# END MAILPANEL AUTH"
+SUPERADMIN_SUDO_DIR="/etc/sudoers.d"
+GENERATED_ROOT="/var/lib/mailpanel/generated"
+ACTIVE_ROOT="/var/lib/mailpanel/generated/active"
+
+validate_linux_username() {
+  local username="${1:-}"
+  [[ "$username" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || exit 67
+}
+
+validate_domain_name() {
+  local domain="${1:-}"
+  [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ ]] || exit 69
+}
+
+validate_email_address() {
+  local email="${1:-}"
+  [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || exit 70
+}
+
+validate_vmail_root() {
+  local root="${1:-}"
+  [[ -n "$root" && "$root" == /* && "$root" != "/" && -d "$root" ]] || exit 73
+  case "$root" in
+    /var/vmail|/var/vmail/*) ;;
+    *) exit 73 ;;
+  esac
+}
+
+validate_numeric_id() {
+  local value="${1:-}"
+  [[ "$value" =~ ^[0-9]+$ ]] || exit 75
+}
+
+canonical_generated_child() {
+  local path="${1:-}"
+  local root_real
+  local path_real
+
+  [[ -n "$path" && "$path" == /* ]] || exit 65
+  root_real="$(readlink -m "$GENERATED_ROOT")"
+  path_real="$(readlink -m "$path")"
+  [[ "$path_real" == "$root_real"/* && "$path_real" != "$root_real" ]] || exit 65
+  printf '%s\n' "$path_real"
+}
+
+validate_generated_file() {
+  local path="${1:-}"
+  local path_real
+
+  [[ ! -L "$path" ]] || exit 65
+  path_real="$(canonical_generated_child "$path")"
+  [[ -f "$path_real" ]] || exit 65
+  printf '%s\n' "$path_real"
+}
+
+validate_active_child_path() {
+  local path="${1:-}"
+  local root_real
+  local path_real
+
+  [[ -n "$path" && "$path" == /* ]] || exit 66
+  [[ ! -L "$path" ]] || exit 66
+  root_real="$(readlink -m "$ACTIVE_ROOT")"
+  path_real="$(readlink -m "$path")"
+  [[ "$path_real" == "$root_real"/* && "$path_real" != "$root_real" ]] || exit 66
+  printf '%s\n' "$path_real"
+}
+
+validate_message_id() {
+  local message_id="${1:-}"
+  [[ "$message_id" =~ ^[A-Za-z0-9][A-Za-z0-9-]{5,31}$ ]] || exit 76
+}
+
+validate_queue_action() {
+  local action_type="${1:-}"
+  case "$action_type" in
+    deliver|delete|view) ;;
+    *) exit 77 ;;
+  esac
+}
+
+safe_vmail_child_path() {
+  local root="${1:-}"
+  local child="${2:-}"
+  local root_real
+  local child_real
+
+  validate_vmail_root "$root"
+  root_real="$(readlink -m "$root")"
+  child_real="$(readlink -m "$child")"
+  [[ "$child_real" == "$root_real"/* ]] || exit 74
+  printf '%s\n' "$child_real"
+}
+
+
+# Payload files handed to the wrapper are written by the agent with mkstemp()
+# under TMPDIR, mode 0600. Accepting any readable path here would let a caller
+# have root install an arbitrary file into /etc/rspamd/local.d as world-readable,
+# so confine the source to a regular file in the temp directory and reject
+# symlinks and hard-linked files.
+validate_agent_payload_file() {
+  local path="${1:-}"
+  local tmp_root="${TMPDIR:-/tmp}"
+  local tmp_real
+  local path_real
+
+  [[ -n "$path" && "$path" == /* ]] || exit 84
+  [[ ! -L "$path" ]] || exit 84
+  [[ -f "$path" ]] || exit 84
+
+  tmp_real="$(readlink -m "$tmp_root")"
+  path_real="$(readlink -m "$path")"
+  [[ "$path_real" == "$tmp_real"/* ]] || exit 84
+
+  # A regular file with more than one link may be an attacker-controlled alias
+  # to a file elsewhere on disk.
+  [[ "$(stat -c '%h' "$path_real")" == "1" ]] || exit 84
+
+  printf '%s\n' "$path_real"
+}
+
+validate_app_root() {
+  local app_root="${1:-}"
+  [[ -n "$app_root" && "$app_root" == /* && -d "$app_root" && -f "$app_root/deploy/manage_acme_tls.sh" ]] || exit 71
+}
+
+configure_acme_profile() {
+  local profile="${1:-}"
+
+  case "$profile" in
+    mail_only)
+      export ACME_INCLUDE_APEX=0
+      export ACME_MAIL_HOST_PATTERNS='mail.%s'
+      export ACME_WEB_HOST_PATTERNS=' '
+      ;;
+    mail_and_web)
+      export ACME_INCLUDE_APEX=0
+      export ACME_MAIL_HOST_PATTERNS='mail.%s'
+      export ACME_WEB_HOST_PATTERNS='webmail.%s,autodiscover.%s,autoconfig.%s'
+      ;;
+    *)
+      exit 72
+      ;;
+  esac
+}
+
+superadmin_home() {
+  getent passwd "$1" | cut -d: -f6
+}
+
+strip_marked_block() {
+  local source="${1:-}"
+  local target="${2:-}"
+  local begin_marker="${3:-}"
+  local end_marker="${4:-}"
+  if [[ -z "$target" ]]; then
+    return
+  fi
+
+  if [[ -f "$source" ]]; then
+    awk -v b="$begin_marker" -v e="$end_marker" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      skip!=1 {print}
+    ' "$source" >"$target"
+  else
+    : >"$target"
+  fi
+}
+
+strip_managed_macros() {
+  strip_marked_block "${1:-}" "${2:-}" "$EXIM_MARKER_BEGIN" "$EXIM_MARKER_END"
+}
+
+strip_managed_routing() {
+  strip_marked_block "${1:-}" "${2:-}" "$EXIM_ROUTING_MARKER_BEGIN" "$EXIM_ROUTING_MARKER_END"
+}
+
+strip_managed_transport() {
+  strip_marked_block "${1:-}" "${2:-}" "$EXIM_TRANSPORT_MARKER_BEGIN" "$EXIM_TRANSPORT_MARKER_END"
+}
+
+strip_managed_auth() {
+  strip_marked_block "${1:-}" "${2:-}" "$EXIM_AUTH_MARKER_BEGIN" "$EXIM_AUTH_MARKER_END"
+}
+
+strip_managed_template() {
+  local source="${1:-}"
+  local target="${2:-}"
+  local tmp_auth
+  local tmp_routing
+
+  tmp_auth="$(mktemp /tmp/mailpanel-exim-template-strip-auth-XXXX)"
+  tmp_routing="$(mktemp /tmp/mailpanel-exim-template-strip-routing-XXXX)"
+  strip_managed_auth "$source" "$tmp_auth"
+  strip_managed_transport "$tmp_auth" "$tmp_routing"
+  strip_managed_routing "$tmp_routing" "$target"
+  rm -f "$tmp_auth" "$tmp_routing"
+}
+
+render_exim_template() {
+  local source="${1:-}"
+  local router_snippet="${2:-}"
+  local transport_snippet="${3:-}"
+  local auth_snippet="${4:-}"
+  local target="${5:-}"
+
+  python3 - "$source" "$router_snippet" "$transport_snippet" "$auth_snippet" "$target" \
+    "$EXIM_ROUTING_MARKER_BEGIN" "$EXIM_ROUTING_MARKER_END" \
+    "$EXIM_TRANSPORT_MARKER_BEGIN" "$EXIM_TRANSPORT_MARKER_END" \
+    "$EXIM_AUTH_MARKER_BEGIN" "$EXIM_AUTH_MARKER_END" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source_path = Path(sys.argv[1])
+router_path = Path(sys.argv[2])
+transport_path = Path(sys.argv[3])
+auth_path = Path(sys.argv[4])
+target_path = Path(sys.argv[5])
+router_begin, router_end, transport_begin, transport_end, auth_begin, auth_end = sys.argv[6:12]
+
+text = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
+router = router_path.read_text(encoding="utf-8").strip() if router_path.is_file() else ""
+transport = transport_path.read_text(encoding="utf-8").strip() if transport_path.is_file() else ""
+auth = auth_path.read_text(encoding="utf-8").strip() if auth_path.is_file() else ""
+
+if router:
+    match = re.search(r'^begin routers\s*$', text, flags=re.MULTILINE)
+    if match is None:
+        raise SystemExit("missing 'begin routers' in exim template")
+    block = f"\n{router_begin}\n{router}\n{router_end}\n"
+    text = text[:match.end()] + block + text[match.end():]
+
+if transport:
+    match = re.search(r'^begin transports\s*$', text, flags=re.MULTILINE)
+    if match is None:
+        raise SystemExit("missing 'begin transports' in exim template")
+    block = f"\n{transport_begin}\n{transport}\n{transport_end}\n"
+    text = text[:match.end()] + block + text[match.end():]
+
+if auth:
+    text = text.rstrip() + f"\n{auth_begin}\n{auth}\n{auth_end}\n"
+else:
+    text = text.rstrip() + "\n"
+
+target_path.write_text(text, encoding="utf-8")
+PY
+}
+
+disable_dovecot_system_auth() {
+  local auth_file="${1:-}"
+  [[ -n "$auth_file" && -f "$auth_file" ]] || return
+
+  python3 - "$auth_file" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+text = re.sub(r'^\s*!include\s+auth-system\.conf\.ext\s*$', '#!include auth-system.conf.ext', text, flags=re.MULTILINE)
+
+if '!include auth-system.conf.ext' not in text and '#!include auth-system.conf.ext' not in text:
+    text = text.rstrip() + "\n#!include auth-system.conf.ext\n"
+
+path.write_text(text, encoding="utf-8")
+PY
+}
+
+cleanup() {
+  if [[ -n "$TMP_CONFIG" && -f "$TMP_CONFIG" ]]; then
+    rm -f "$TMP_CONFIG"
+  fi
+  if [[ -n "$TMP_INCLUDE" && -f "$TMP_INCLUDE" ]]; then
+    rm -f "$TMP_INCLUDE"
+  fi
+  if [[ -n "$TMP_MACROS" && -f "$TMP_MACROS" ]]; then
+    rm -f "$TMP_MACROS"
+  fi
+  if [[ -n "$TMP_BASE_MACROS" && -f "$TMP_BASE_MACROS" ]]; then
+    rm -f "$TMP_BASE_MACROS"
+  fi
+  if [[ -n "$TMP_TEMPLATE_BASE" && -f "$TMP_TEMPLATE_BASE" ]]; then
+    rm -f "$TMP_TEMPLATE_BASE"
+  fi
+  if [[ -n "$TMP_TEMPLATE_RENDERED" && -f "$TMP_TEMPLATE_RENDERED" ]]; then
+    rm -f "$TMP_TEMPLATE_RENDERED"
+  fi
+  if [[ -n "$TMP_DOVECOT_DIR" && -d "$TMP_DOVECOT_DIR" ]]; then
+    rm -rf "$TMP_DOVECOT_DIR"
+  fi
+}
+trap cleanup EXIT
+
+case "$ACTION" in
+  queue-list)
+    exec /usr/sbin/exim -bp
+    ;;
+  queue-count)
+    exec /usr/sbin/exim -bpc
+    ;;
+  queue-action)
+    ACTION_TYPE="$SERVICE"
+    MSG_ID="$ARG1"
+    validate_queue_action "$ACTION_TYPE"
+    validate_message_id "$MSG_ID"
+    case "$ACTION_TYPE" in
+      deliver) exec /usr/sbin/exim -M "$MSG_ID" ;;
+      delete) exec /usr/sbin/exim -Mrm "$MSG_ID" ;;
+      view)
+        /usr/sbin/exim -Mvh "$MSG_ID"
+        printf '\n----- BODY -----\n\n'
+        exec /usr/sbin/exim -Mvb "$MSG_ID"
+        ;;
+    esac
+    ;;
+  read-log)
+    LOG_SERVICE="$SERVICE"
+    LINE_COUNT="${ARG1:-200}"
+    KEYWORD="${ARG2:-}"
+    validate_numeric_id "$LINE_COUNT"
+    [[ "$LINE_COUNT" -ge 1 && "$LINE_COUNT" -le 5000 ]] || exit 78
+    case "$LOG_SERVICE" in
+      nginx) LOG_FILE="/var/log/nginx/error.log"; LOG_FILTER="" ;;
+      exim) LOG_FILE="/var/log/exim4/mainlog"; LOG_FILTER="" ;;
+      dovecot) LOG_FILE="/var/log/mail.log"; LOG_FILTER="dovecot" ;;
+      rspamd) LOG_FILE="/var/log/rspamd/rspamd.log"; LOG_FILTER="" ;;
+      fail2ban) LOG_FILE="/var/log/fail2ban.log"; LOG_FILTER="" ;;
+      clamav) LOG_FILE="/var/log/clamav/clamav.log"; LOG_FILTER="" ;;
+      *) exit 64 ;;
+    esac
+    if [[ -f "$LOG_FILE" ]]; then
+      if [[ -n "$KEYWORD" ]]; then
+        tail -n "$LINE_COUNT" "$LOG_FILE" | grep -F -i -- "$KEYWORD" || true
+      elif [[ -n "$LOG_FILTER" ]]; then
+        tail -n "$((LINE_COUNT * 4))" "$LOG_FILE" | grep -F -i -- "$LOG_FILTER" | tail -n "$LINE_COUNT" || true
+      else
+        tail -n "$LINE_COUNT" "$LOG_FILE"
+      fi
+      exit 0
+    fi
+    if command -v journalctl >/dev/null 2>&1; then
+      if [[ -n "$KEYWORD" ]]; then
+        journalctl -u "$LOG_SERVICE" -n "$LINE_COUNT" --no-pager | grep -F -i -- "$KEYWORD" || true
+      else
+        journalctl -u "$LOG_SERVICE" -n "$LINE_COUNT" --no-pager
+      fi
+      exit 0
+    fi
+    exit 79
+    ;;
+  validate-exim)
+    SERVICE="$(validate_generated_file "$SERVICE")"
+    EXIM_EXTRA_DIR="$(dirname "$SERVICE")"
+    EXIM_MANAGED_MACROS="$EXIM_EXTRA_DIR/exim4.conf.localmacros.managed"
+    EXIM_ROUTER_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-router.conf"
+    EXIM_TRANSPORT_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-transport.conf"
+    EXIM_AUTH_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-auth.conf"
+    install -d -m 0755 /etc/exim4/mailpanel
+    TMP_INCLUDE="$(mktemp /etc/exim4/mailpanel/check_rcpt_local.validate.XXXX.acl)"
+    TMP_CONFIG="$(mktemp /etc/exim4/mailpanel/exim4.validate.XXXX.conf)"
+    TMP_BASE_MACROS="$(mktemp /tmp/mailpanel-exim-base-XXXX)"
+    TMP_MACROS="$(mktemp /tmp/mailpanel-exim-macros-XXXX)"
+    TMP_TEMPLATE_BASE="$(mktemp /tmp/mailpanel-exim-template-XXXX)"
+    TMP_TEMPLATE_RENDERED="$(mktemp /tmp/mailpanel-exim-template-rendered-XXXX)"
+    install -o root -g root -m 0644 "$SERVICE" "$TMP_INCLUDE"
+    strip_managed_macros "$EXIM_LOCALMACROS" "$TMP_BASE_MACROS"
+    strip_managed_template "$EXIM_TEMPLATE" "$TMP_TEMPLATE_BASE"
+    {
+      cat "$TMP_BASE_MACROS"
+      printf '%s\n' "$EXIM_MARKER_BEGIN"
+      [[ -f "$EXIM_MANAGED_MACROS" ]] && cat "$EXIM_MANAGED_MACROS"
+      printf '%s\n' "CHECK_RCPT_LOCAL_ACL_FILE=$TMP_INCLUDE"
+      printf '%s\n' "$EXIM_MARKER_END"
+    } >"$TMP_MACROS"
+    render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$TMP_TEMPLATE_RENDERED"
+    { cat "$TMP_MACROS"; cat "$TMP_TEMPLATE_RENDERED"; } >"$TMP_CONFIG"
+    chown root:root "$TMP_CONFIG"
+    chmod 0644 "$TMP_CONFIG"
+    exec /usr/sbin/exim -C "$TMP_CONFIG" -bV
+    ;;
+  validate-nginx)
+    SERVICE="$(validate_generated_file "$SERVICE")"
+    TMP_NGINX_DIR="$(mktemp -d /tmp/mailpanel-nginx-XXXX)"
+    cp -a /etc/nginx/. "$TMP_NGINX_DIR/"
+    install -d -m 0755 "$TMP_NGINX_DIR/sites-available" "$TMP_NGINX_DIR/sites-enabled"
+    install -m 0644 "$SERVICE" "$TMP_NGINX_DIR/sites-available/mailpanel"
+    ln -sfn ../sites-available/mailpanel "$TMP_NGINX_DIR/sites-enabled/mailpanel"
+    python3 - "$TMP_NGINX_DIR/nginx.conf" "$TMP_NGINX_DIR" <<'PY'
+from pathlib import Path
+import sys
+config_path = Path(sys.argv[1])
+root = sys.argv[2].rstrip('/')
+text = config_path.read_text(encoding='utf-8')
+text = text.replace('/etc/nginx/', root + '/')
+config_path.write_text(text, encoding='utf-8')
+PY
+    exec /usr/sbin/nginx -t -c "$TMP_NGINX_DIR/nginx.conf"
+    ;;
+  validate-dovecot)
+    SERVICE="$(validate_generated_file "$SERVICE")"
+    TMP_DOVECOT_DIR="$(mktemp -d /tmp/mailpanel-dovecot-XXXX)"
+    cp -a /etc/dovecot/. "$TMP_DOVECOT_DIR/"
+    install -d -m 0755 "$TMP_DOVECOT_DIR/conf.d"
+    install -m 0644 "$SERVICE" "$TMP_DOVECOT_DIR/conf.d/99-mailpanel.conf"
+    if [[ -f "$(dirname "$SERVICE")/dovecot-sql.conf.ext" ]]; then
+      install -m 0640 "$(dirname "$SERVICE")/dovecot-sql.conf.ext" "$TMP_DOVECOT_DIR/dovecot-sql.conf.ext"
+    fi
+    disable_dovecot_system_auth "$TMP_DOVECOT_DIR/conf.d/10-auth.conf"
+    exec /usr/sbin/dovecot -c "$TMP_DOVECOT_DIR/dovecot.conf" -n
+    ;;
+  validate-rspamd)
+    SERVICE="$(validate_generated_file "$SERVICE")"
+    VERSION_DIR="$(dirname "$SERVICE")"
+    TMP_RSPAMD_DIR="$(mktemp -d /tmp/mailpanel-rspamd-conf-XXXX)"
+    cp -a /etc/rspamd/. "$TMP_RSPAMD_DIR/"
+    install -d -m 0755 "$TMP_RSPAMD_DIR/local.d"
+    install -m 0644 "$SERVICE" "$TMP_RSPAMD_DIR/local.d/$(basename "$SERVICE")"
+    find "$VERSION_DIR" -maxdepth 1 -type f -name '*.conf' ! -name "$(basename "$SERVICE")" -exec install -m 0644 {} "$TMP_RSPAMD_DIR/local.d/" \;
+    /usr/bin/rspamadm configtest -c "$TMP_RSPAMD_DIR/rspamd.conf"
+    STATUS=$?
+    rm -rf "$TMP_RSPAMD_DIR"
+    exit "$STATUS"
+    ;;
+  validate-fail2ban)
+    SERVICE="$(validate_generated_file "$SERVICE")"
+    TMP_CONFIG="$(mktemp /tmp/mailpanel-fail2ban-XXXX.local)"
+    TMP_INCLUDE="$(mktemp -d /tmp/mailpanel-fail2ban-conf-XXXX)"
+    cp -a /etc/fail2ban/. "$TMP_INCLUDE/"
+    install -m 0644 "$SERVICE" "$TMP_CONFIG"
+    install -m 0644 "$TMP_CONFIG" "$TMP_INCLUDE/jail.d/99-mailpanel.validate.local"
+    if [[ -d "$(dirname "$SERVICE")/filter.d" ]]; then
+      install -d -m 0755 "$TMP_INCLUDE/filter.d"
+      find "$(dirname "$SERVICE")/filter.d" -maxdepth 1 -type f -name '*.conf' -exec install -m 0644 {} "$TMP_INCLUDE/filter.d/" \;
+    fi
+    /usr/bin/fail2ban-client -t -c "$TMP_INCLUDE"
+    rm -rf "$TMP_INCLUDE" "$TMP_CONFIG"
+    exit 0
+    ;;
+  fail2ban-status)
+    exec /usr/bin/fail2ban-client status
+    ;;
+  fail2ban-unban)
+    JAIL="$SERVICE"
+    IP_ADDRESS="$ARG1"
+    [[ "$JAIL" =~ ^[A-Za-z0-9_.:-]+$ ]] || exit 80
+    [[ "$IP_ADDRESS" =~ ^[0-9A-Fa-f:.]+$ ]] || exit 81
+    exec /usr/bin/fail2ban-client set "$JAIL" unbanip "$IP_ADDRESS"
+    ;;
+  rspamd-get-scores)
+    if [[ -f /etc/rspamd/local.d/actions.conf ]]; then
+      cat /etc/rspamd/local.d/actions.conf
+    fi
+    ;;
+  rspamd-set-scores)
+    REJECT="$SERVICE"
+    ADD_HEADER="$ARG1"
+    GREYLIST="$ARG2"
+    [[ "$REJECT" =~ ^[0-9]+([.][0-9]+)?$ ]] || exit 82
+    [[ "$ADD_HEADER" =~ ^[0-9]+([.][0-9]+)?$ ]] || exit 82
+    [[ "$GREYLIST" =~ ^[0-9]+([.][0-9]+)?$ ]] || exit 82
+    install -d -m 0755 /etc/rspamd/local.d
+    TMP_CONFIG="$(mktemp /tmp/mailpanel-rspamd-actions-XXXX.conf)"
+    cat >"$TMP_CONFIG" <<EOF
+reject = $REJECT;
+add_header = $ADD_HEADER;
+greylist = $GREYLIST;
+EOF
+    install -o root -g root -m 0644 "$TMP_CONFIG" /etc/rspamd/local.d/actions.conf
+    rm -f "$TMP_CONFIG"
+    /usr/bin/systemctl reload rspamd || true
+    ;;
+  rspamd-set-multimap)
+    install -d -m 0755 /etc/rspamd/local.d
+    MAP_IP_WL="$(validate_agent_payload_file "$SERVICE")"
+    MAP_IP_BL="$(validate_agent_payload_file "$ARG1")"
+    MAP_SENDER_WL="$(validate_agent_payload_file "$ARG2")"
+    MAP_SENDER_BL="$(validate_agent_payload_file "$ARG3")"
+    MAP_RCPT_WL="$(validate_agent_payload_file "$ARG4")"
+    MAP_RCPT_BL="$(validate_agent_payload_file "${6:-}")"
+    install -o root -g root -m 0644 "$MAP_IP_WL" /etc/rspamd/local.d/ip_whitelist.map
+    install -o root -g root -m 0644 "$MAP_IP_BL" /etc/rspamd/local.d/ip_blacklist.map
+    install -o root -g root -m 0644 "$MAP_SENDER_WL" /etc/rspamd/local.d/sender_whitelist.map
+    install -o root -g root -m 0644 "$MAP_SENDER_BL" /etc/rspamd/local.d/sender_blacklist.map
+    install -o root -g root -m 0644 "$MAP_RCPT_WL" /etc/rspamd/local.d/rcpt_whitelist.map
+    install -o root -g root -m 0644 "$MAP_RCPT_BL" /etc/rspamd/local.d/rcpt_blacklist.map
+    /usr/bin/systemctl reload rspamd || true
+    ;;
+  rspamd-set-tenant-rules)
+    [[ "$SERVICE" == "rspamd" ]] || exit 64
+    SOURCE_FILE="$(validate_agent_payload_file "$ARG1")"
+    install -d -m 0755 /etc/rspamd/local.d
+    install -o root -g root -m 0644 "$SOURCE_FILE" /etc/rspamd/local.d/tenant_spam_rules.json
+    /usr/bin/systemctl reload rspamd || true
+    ;;
+  service-status)
+    case "$SERVICE" in nginx|exim|dovecot|rspamd|fail2ban|clamav) ;; *) exit 64 ;; esac
+    case "$SERVICE" in
+      nginx) exec /usr/bin/systemctl status nginx ;;
+      exim) exec /usr/bin/systemctl status exim4 ;;
+      dovecot) exec /usr/bin/systemctl status dovecot ;;
+      rspamd) exec /usr/bin/systemctl status rspamd ;;
+      fail2ban) exec /usr/bin/systemctl status fail2ban ;;
+      clamav) exec /usr/bin/systemctl status clamav-daemon ;;
+    esac
+    ;;
+  service-reload)
+    case "$SERVICE" in nginx|exim|dovecot|rspamd|fail2ban|clamav) ;; *) exit 64 ;; esac
+    case "$SERVICE" in
+      nginx) exec /usr/bin/systemctl reload nginx ;;
+      exim) exec /usr/bin/systemctl reload exim4 ;;
+      dovecot) exec /usr/bin/systemctl reload dovecot ;;
+      rspamd) exec /usr/bin/systemctl reload rspamd ;;
+      fail2ban) exec /usr/bin/systemctl reload fail2ban ;;
+      clamav) exec /usr/bin/systemctl restart clamav-daemon ;;
+    esac
+    ;;
+  activate-version)
+    case "$SERVICE" in nginx|exim|dovecot|rspamd|fail2ban) ;; *) exit 64 ;; esac
+    ARG1="$(validate_generated_file "$ARG1")"
+    ARG2="$(validate_active_child_path "$ARG2")"
+    VERSION_DIR="$(dirname "$ARG1")"
+    ACTIVE_DIR="$(dirname "$ARG2")"
+    install -d -m 0750 "$ACTIVE_DIR"
+    install -m 0640 "$ARG1" "$ARG2"
+    find "$VERSION_DIR" -mindepth 1 -maxdepth 3 -type f ! -name "$(basename "$ARG1")" | while read -r EXTRA_FILE; do
+      RELATIVE_PATH="${EXTRA_FILE#$VERSION_DIR/}"
+      install -d -m 0750 "$ACTIVE_DIR/$(dirname "$RELATIVE_PATH")"
+      install -m 0640 "$EXTRA_FILE" "$ACTIVE_DIR/$RELATIVE_PATH"
+    done
+    case "$SERVICE" in
+      nginx)
+        install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled
+        install -o root -g root -m 0644 "$ARG1" /etc/nginx/sites-available/mailpanel
+        ln -sfn ../sites-available/mailpanel /etc/nginx/sites-enabled/mailpanel
+        ;;
+      dovecot)
+        install -m 0644 "$ARG1" /etc/dovecot/conf.d/99-mailpanel.conf
+        if [[ -f "$VERSION_DIR/dovecot-sql.conf.ext" ]]; then
+          install -m 0640 "$VERSION_DIR/dovecot-sql.conf.ext" "$ACTIVE_DIR/dovecot-sql.conf.ext"
+        fi
+        disable_dovecot_system_auth /etc/dovecot/conf.d/10-auth.conf
+        ;;
+      exim)
+        EXIM_EXTRA_DIR="$VERSION_DIR"
+        EXIM_MANAGED_MACROS="$EXIM_EXTRA_DIR/exim4.conf.localmacros.managed"
+        EXIM_ROUTER_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-router.conf"
+        EXIM_TRANSPORT_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-transport.conf"
+        EXIM_AUTH_SNIPPET="$EXIM_EXTRA_DIR/mailpanel-auth.conf"
+        install -d -m 0755 /etc/exim4 /etc/exim4/mailpanel
+        install -o root -g root -m 0644 "$ARG1" "$ARG2"
+        install -o root -g root -m 0644 "$ARG1" "$EXIM_LIVE_INCLUDE"
+        find "$EXIM_EXTRA_DIR" -maxdepth 1 -type f -name '*.map' -exec install -o root -g root -m 0644 {} /etc/exim4/mailpanel/ \;
+        TMP_CONFIG="$(mktemp /tmp/mailpanel-exim-macros-XXXX)"
+        strip_managed_macros "$EXIM_LOCALMACROS" "$TMP_CONFIG"
+        {
+          cat "$TMP_CONFIG" 2>/dev/null || true
+          printf '%s\n' "$EXIM_MARKER_BEGIN"
+          [[ -f "$EXIM_MANAGED_MACROS" ]] && cat "$EXIM_MANAGED_MACROS"
+          printf 'CHECK_RCPT_LOCAL_ACL_FILE=%s\n' "$EXIM_LIVE_INCLUDE"
+          printf '%s\n' "$EXIM_MARKER_END"
+        } > "${TMP_CONFIG}.final"
+        install -m 0644 "${TMP_CONFIG}.final" "$EXIM_LOCALMACROS"
+        install -d -m 0755 /etc/exim4/conf.d/auth
+        if [[ -f "$EXIM_AUTH_SNIPPET" ]]; then
+          install -o root -g root -m 0644 "$EXIM_AUTH_SNIPPET" /etc/exim4/conf.d/auth/40_mailpanel_dovecot
+          install -o root -g root -m 0644 "$EXIM_AUTH_SNIPPET" /etc/exim4/mailpanel/auth.conf
+        else
+          rm -f /etc/exim4/conf.d/auth/40_mailpanel_dovecot /etc/exim4/mailpanel/auth.conf
+        fi
+        if [[ -f "$EXIM_ROUTER_SNIPPET" ]]; then
+          install -o root -g root -m 0644 "$EXIM_ROUTER_SNIPPET" /etc/exim4/mailpanel/router.conf
+        else
+          rm -f /etc/exim4/mailpanel/router.conf
+        fi
+        if [[ -f "$EXIM_TRANSPORT_SNIPPET" ]]; then
+          install -o root -g root -m 0644 "$EXIM_TRANSPORT_SNIPPET" /etc/exim4/mailpanel/transport.conf
+        else
+          rm -f /etc/exim4/mailpanel/transport.conf
+        fi
+        TMP_TEMPLATE_BASE="$(mktemp /tmp/mailpanel-exim-template-XXXX)"
+        TMP_TEMPLATE_RENDERED="$(mktemp /tmp/mailpanel-exim-template-rendered-XXXX)"
+        strip_managed_template "$EXIM_TEMPLATE" "$TMP_TEMPLATE_BASE"
+        render_exim_template "$TMP_TEMPLATE_BASE" "$EXIM_ROUTER_SNIPPET" "$EXIM_TRANSPORT_SNIPPET" "$EXIM_AUTH_SNIPPET" "$TMP_TEMPLATE_RENDERED"
+        install -m 0644 "$TMP_TEMPLATE_RENDERED" "$EXIM_TEMPLATE"
+        /usr/sbin/update-exim4.conf
+        ;;
+      fail2ban)
+        install -d -m 0755 /etc/fail2ban/jail.d
+        install -m 0644 "$ARG1" /etc/fail2ban/jail.d/99-mailpanel.local
+        if [[ -d "$VERSION_DIR/filter.d" ]]; then
+          install -d -m 0755 /etc/fail2ban/filter.d
+          find "$VERSION_DIR/filter.d" -maxdepth 1 -type f -name '*.conf' -exec install -m 0644 {} /etc/fail2ban/filter.d/ \;
+        fi
+        ;;
+      rspamd)
+        install -d -m 0755 /etc/rspamd/local.d
+        install -o root -g root -m 0644 "$ARG1" "/etc/rspamd/local.d/$(basename "$ARG1")"
+        find "$VERSION_DIR" -maxdepth 1 -type f -name '*.conf' ! -name "$(basename "$ARG1")" -exec install -o root -g root -m 0644 {} /etc/rspamd/local.d/ \;
+        ;;
+    esac
+    ;;
+  rename-domain)
+    OLD_DOMAIN="$SERVICE"
+    NEW_DOMAIN="$ARG1"
+    validate_domain_name "$OLD_DOMAIN"
+    validate_domain_name "$NEW_DOMAIN"
+    VMAIL_ROOT="/var/vmail"
+    validate_vmail_root "$VMAIL_ROOT"
+    OLD_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$OLD_DOMAIN")"
+    NEW_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$NEW_DOMAIN")"
+    if [[ -d "$OLD_DIR" && ! -e "$NEW_DIR" ]]; then
+      mv "$OLD_DIR" "$NEW_DIR"
+    fi
+    ;;
+  provision-super-admin)
+    validate_linux_username "$SERVICE"
+    SSH_ENABLED="${ARG1:-0}"
+    SSH_SUDO_ENABLED="${ARG2:-0}"
+    KEY_FILE="${ARG3:-}"
+    PASSWORD_HASH_FILE="${ARG4:-}"
+    if ! id -u "$SERVICE" >/dev/null 2>&1; then
+      if [[ "$SSH_ENABLED" == "1" ]]; then
+        useradd --create-home --shell /bin/bash "$SERVICE"
+      else
+        useradd --create-home --shell /usr/sbin/nologin "$SERVICE"
+      fi
+    fi
+    HOME_DIR="$(superadmin_home "$SERVICE")"
+    install -d -o "$SERVICE" -g "$SERVICE" -m 0700 "$HOME_DIR/.ssh"
+    if [[ -n "$PASSWORD_HASH_FILE" ]]; then
+      PASSWORD_HASH_FILE="$(validate_agent_payload_file "$PASSWORD_HASH_FILE")"
+      PASSWORD_HASH="$(head -n 1 "$PASSWORD_HASH_FILE")"
+      if [[ -n "$PASSWORD_HASH" ]]; then
+        usermod -p "$PASSWORD_HASH" "$SERVICE"
+      fi
+    fi
+    if [[ "$SSH_ENABLED" == "1" ]]; then
+      usermod -s /bin/bash "$SERVICE"
+      if [[ -n "$KEY_FILE" ]]; then
+        KEY_FILE="$(validate_agent_payload_file "$KEY_FILE")"
+        install -o "$SERVICE" -g "$SERVICE" -m 0600 "$KEY_FILE" "$HOME_DIR/.ssh/authorized_keys"
+      fi
+    else
+      usermod -s /usr/sbin/nologin "$SERVICE"
+    fi
+    SUDOERS_FILE="$SUPERADMIN_SUDO_DIR/mailpanel-superadmin-$SERVICE"
+    if [[ "$SSH_SUDO_ENABLED" == "1" ]]; then
+      cat >"$SUDOERS_FILE" <<EOF
+Defaults:$SERVICE !requiretty
+$SERVICE ALL=(ALL:ALL) ALL
+EOF
+      chmod 0440 "$SUDOERS_FILE"
+    else
+      rm -f "$SUDOERS_FILE"
+    fi
+    chown -R "$SERVICE":"$SERVICE" "$HOME_DIR/.ssh"
+    ;;
+  revoke-super-admin)
+    validate_linux_username "$SERVICE"
+    if id -u "$SERVICE" >/dev/null 2>&1; then
+      HOME_DIR="$(superadmin_home "$SERVICE")"
+      rm -f "$HOME_DIR/.ssh/authorized_keys"
+      usermod -s /usr/sbin/nologin "$SERVICE" || true
+      rm -f "$SUPERADMIN_SUDO_DIR/mailpanel-superadmin-$SERVICE"
+      [[ -d "$HOME_DIR/.ssh" ]] && chown -R "$SERVICE":"$SERVICE" "$HOME_DIR/.ssh"
+    fi
+    ;;
+  purge-super-admin)
+    validate_linux_username "$SERVICE"
+    if id -u "$SERVICE" >/dev/null 2>&1; then
+      HOME_DIR="$(superadmin_home "$SERVICE")"
+      rm -f "$SUPERADMIN_SUDO_DIR/mailpanel-superadmin-$SERVICE"
+      if [[ -n "$HOME_DIR" && "$HOME_DIR" == /home/* ]]; then
+        userdel -r "$SERVICE" >/dev/null 2>&1 || userdel "$SERVICE"
+        rm -rf "$HOME_DIR"
+      else
+        usermod -s /usr/sbin/nologin "$SERVICE" || true
+        rm -f "$HOME_DIR/.ssh/authorized_keys" 2>/dev/null || true
+      fi
+    fi
+    ;;
+  provision-mailbox-data)
+    VMAIL_ROOT="$SERVICE"
+    EMAIL="$ARG1"
+    VMAIL_UID="${ARG2:-}"
+    VMAIL_GID="${ARG3:-}"
+    validate_vmail_root "$VMAIL_ROOT"
+    validate_email_address "$EMAIL"
+    validate_numeric_id "$VMAIL_UID"
+    validate_numeric_id "$VMAIL_GID"
+    LOCAL_PART="${EMAIL%@*}"
+    DOMAIN_PART="${EMAIL#*@}"
+    validate_domain_name "$DOMAIN_PART"
+    DOMAIN_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$DOMAIN_PART")"
+    MAILBOX_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$DOMAIN_DIR/$LOCAL_PART")"
+    install -d -m 0750 "$DOMAIN_DIR"
+    chown "$VMAIL_UID:$VMAIL_GID" "$DOMAIN_DIR"
+    chmod 0750 "$DOMAIN_DIR"
+    install -d -m 0700 "$MAILBOX_DIR" "$MAILBOX_DIR/cur" "$MAILBOX_DIR/new" "$MAILBOX_DIR/tmp"
+    chown "$VMAIL_UID:$VMAIL_GID" "$MAILBOX_DIR"
+    chmod 0700 "$MAILBOX_DIR"
+    chown -R "$VMAIL_UID:$VMAIL_GID" "$MAILBOX_DIR/cur" "$MAILBOX_DIR/new" "$MAILBOX_DIR/tmp"
+    for FOLDER in Drafts Sent Trash Junk Archive; do
+      FOLDER_DIR="$MAILBOX_DIR/.$FOLDER"
+      install -d -m 0700 "$FOLDER_DIR" "$FOLDER_DIR/cur" "$FOLDER_DIR/new" "$FOLDER_DIR/tmp"
+      chown "$VMAIL_UID:$VMAIL_GID" "$FOLDER_DIR"
+      chmod 0700 "$FOLDER_DIR"
+      chown -R "$VMAIL_UID:$VMAIL_GID" "$FOLDER_DIR/cur" "$FOLDER_DIR/new" "$FOLDER_DIR/tmp"
+      : >"$FOLDER_DIR/maildirfolder"
+      chown "$VMAIL_UID:$VMAIL_GID" "$FOLDER_DIR/maildirfolder"
+      chmod 0600 "$FOLDER_DIR/maildirfolder"
+    done
+    cat >"$MAILBOX_DIR/subscriptions" <<'EOF'
+Drafts
+Sent
+Trash
+Junk
+Archive
+EOF
+    chown "$VMAIL_UID:$VMAIL_GID" "$MAILBOX_DIR/subscriptions"
+    chmod 0600 "$MAILBOX_DIR/subscriptions"
+    ;;
+  purge-mailbox-data)
+    VMAIL_ROOT="$SERVICE"
+    EMAIL="$ARG1"
+    validate_vmail_root "$VMAIL_ROOT"
+    validate_email_address "$EMAIL"
+    LOCAL_PART="${EMAIL%@*}"
+    DOMAIN_PART="${EMAIL#*@}"
+    validate_domain_name "$DOMAIN_PART"
+    MAILBOX_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$DOMAIN_PART/$LOCAL_PART")"
+    DOMAIN_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$DOMAIN_PART")"
+    rm -rf --one-file-system "$MAILBOX_DIR"
+    rmdir "$DOMAIN_DIR" >/dev/null 2>&1 || true
+    ;;
+  purge-domain-data)
+    VMAIL_ROOT="$SERVICE"
+    DOMAIN="$ARG1"
+    validate_vmail_root "$VMAIL_ROOT"
+    validate_domain_name "$DOMAIN"
+    DOMAIN_DIR="$(safe_vmail_child_path "$VMAIL_ROOT" "$VMAIL_ROOT/$DOMAIN")"
+    rm -rf --one-file-system "$DOMAIN_DIR"
+    ;;
+  verify-super-admin-password)
+    validate_linux_username "$SERVICE"
+    PASSWORD_FILE="$(validate_agent_payload_file "$ARG1")"
+    exec python3 - "$SERVICE" "$PASSWORD_FILE" <<'PY'
+import crypt
+import pwd
+import spwd
+import sys
+
+username = sys.argv[1]
+password_file = sys.argv[2]
+
+try:
+    pwd.getpwnam(username)
+    shadow_hash = spwd.getspnam(username).sp_pwdp
+    with open(password_file, "r", encoding="utf-8") as handle:
+        password = handle.read().rstrip("\n")
+except Exception:
+    raise SystemExit(1)
+
+if not shadow_hash or shadow_hash in {"!", "*", "x"}:
+    raise SystemExit(1)
+
+raise SystemExit(0 if crypt.crypt(password, shadow_hash) == shadow_hash else 1)
+PY
+    ;;
+  acme-tls-provision-domain)
+    APP_ROOT="$SERVICE"
+    DOMAIN="$ARG1"
+    EMAIL="$ARG2"
+    PROFILE="$ARG3"
+    validate_app_root "$APP_ROOT"
+    validate_domain_name "$DOMAIN"
+    validate_email_address "$EMAIL"
+    configure_acme_profile "$PROFILE"
+    export ACME_EMAIL="$EMAIL"
+    exec /usr/bin/bash "$APP_ROOT/deploy/manage_acme_tls.sh" provision-domain "$APP_ROOT" "$DOMAIN"
+    ;;
+  acme-tls-renew-domain)
+    APP_ROOT="$SERVICE"
+    DOMAIN="$ARG1"
+    EMAIL="$ARG2"
+    PROFILE="$ARG3"
+    validate_app_root "$APP_ROOT"
+    validate_domain_name "$DOMAIN"
+    validate_email_address "$EMAIL"
+    configure_acme_profile "$PROFILE"
+    export ACME_EMAIL="$EMAIL"
+    export ACME_FORCE_RENEWAL=1
+    exec /usr/bin/bash "$APP_ROOT/deploy/manage_acme_tls.sh" provision-domain "$APP_ROOT" "$DOMAIN"
+    ;;
+  *)
+    exit 64
+    ;;
+esac

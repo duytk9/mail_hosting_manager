@@ -1,0 +1,13 @@
+[Unit]
+Description=MailPanel System Agent
+After=network.target
+
+[Service]
+Type=oneshot
+User=mailpanel-agent
+Group=mailpanel-agent
+WorkingDirectory=/opt/mailpanel
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

@@ -80,7 +80,7 @@ DNS khuyến nghị cho mỗi domain mail:
 ## 4. Lấy source code
 
 ```bash
-git clone https://github.com/duytk9/quan_ly_mail_hosting.git /opt/mailpanel
+git clone https://github.com/duytk9/mail_hosting_manager.git /opt/mailpanel
 cd /opt/mailpanel
 ```
 

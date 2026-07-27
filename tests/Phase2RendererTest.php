@@ -106,7 +106,9 @@ final class Phase2RendererTest extends TestCase
         $this->assertStringContainsString('location ^~ /qa/', $draft['content']);
         $this->assertStringContainsString('return 404;', $draft['content']);
         $this->assertStringContainsString("script-src 'self' 'unsafe-inline' 'unsafe-eval'", $draft['content']);
-        $this->assertStringContainsString("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;", $draft['content']);
+        $this->assertStringContainsString("style-src 'self' 'unsafe-inline';", $draft['content']);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $draft['content']);
+        $this->assertStringNotContainsString('fonts.gstatic.com', $draft['content']);
         $this->assertStringContainsString('Keep this relaxed policy scoped to the webmail PHP location only', $draft['content']);
         $this->assertSame(1, substr_count($draft['content'], 'add_header Content-Security-Policy'));
         $this->assertSame(1, substr_count($draft['content'], 'add_header X-Frame-Options'));

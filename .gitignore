@@ -10,6 +10,8 @@
 /force_deploy.php
 /_apply_exim_version.php
 /_server_phase12.sh
+/deploy/deploy.env
+/deploy/install.conf
 __pycache__/
 *.py[cod]
 *$py.class

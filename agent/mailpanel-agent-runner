@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec /usr/bin/python3 /opt/mailpanel/agent/mailpanel_agent.py "$@"
+exec /usr/bin/python3 /usr/local/lib/mailpanel/mailpanel_agent.py "$@"

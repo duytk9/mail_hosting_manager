@@ -24,7 +24,11 @@ final class AdminMobileUiTest extends TestCase
         $this->assertStringContainsString('max-height: calc(100dvh - 16px) !important', $css);
         $this->assertStringContainsString('.admin-modal__panel::before', $css);
         $this->assertStringContainsString('@media (max-width: 380px)', $css);
-        $this->assertStringContainsString('/assets/admin.css?v=20260708-form-polish', $layout);
-        $this->assertStringContainsString('/assets/admin.css?v=20260708-form-polish', $login);
+        $this->assertStringContainsString('@font-face', $css);
+        $this->assertStringContainsString('/assets/fonts/be-vietnam-pro-regular.ttf', $css);
+        $this->assertStringContainsString('/assets/admin.css?v=20260727-local-fonts', $layout);
+        $this->assertStringContainsString('/assets/admin.css?v=20260727-local-fonts', $login);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $layout);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $login);
     }
 }

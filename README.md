@@ -15,18 +15,25 @@ MailPanel là control panel quản lý mail hosting đa khách hàng, tập trun
 
 Tài liệu triển khai chi tiết bằng tiếng Việt nằm tại `docs/INSTALL.md`.
 
-Luồng rút gọn:
+Luồng cài mới rút gọn:
 
 ```bash
-git clone https://github.com/duytk9/quan_ly_mail_hosting.git /opt/mailpanel
-cd /opt/mailpanel
-cp .env.example .env
-composer install --no-dev --optimize-autoloader
-php scripts/migrate.php
-bash deploy/install_agent.sh /opt/mailpanel mailpanel-agent www-data
+git clone https://github.com/duytk9/mail_hosting_manager.git /root/mail_hosting_manager
+cd /root/mail_hosting_manager
+sudo bash deploy/install.sh
 ```
 
-Sau đó đăng nhập portal quản trị, tạo package/tenant/domain/mailbox, sinh cấu hình, apply và kiểm thử gửi nhận mail.
+Installer tạo secrets ở ngoài repository, cài đầy đủ mail stack và in thông tin
+đăng nhập lần đầu. Có thể dùng `deploy/install.conf.example` cho chế độ
+`--unattended`.
+
+Các lần cập nhật sau dùng một trong hai mô hình release (không trộn cả hai):
+
+- `deploy/deploy.sh`: đẩy release từ máy trạm qua SSH/rsync.
+- `deploy/deploy-from-git.sh`: máy chủ tự kéo nhánh `main` bằng deploy key chỉ đọc.
+
+Chạy `bash deploy/healthcheck.sh` trên máy chủ để kiểm tra dịch vụ, TLS,
+database, quyền file và các cổng mail sau khi triển khai.
 
 ## Tài liệu liên quan
 

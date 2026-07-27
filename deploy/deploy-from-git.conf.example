@@ -1,0 +1,35 @@
+# MailPanel pull-deployment config.
+# Install to /etc/mailpanel/deploy.conf on the server:
+#
+#   install -d -m 0755 /etc/mailpanel
+#   install -m 0644 deploy/deploy-from-git.conf.example /etc/mailpanel/deploy.conf
+#   nano /etc/mailpanel/deploy.conf
+#
+# Contains NO passwords. Repository access uses a read-only SSH deploy key held
+# by the deploy user on this server.
+
+# --- Repository --------------------------------------------------------------
+# Use the SSH form so the deploy key is used. HTTPS with an embedded token would
+# put a credential in this file, which is exactly what this layout avoids.
+GIT_REMOTE=git@github.com:duytk9/mail_hosting_manager.git
+GIT_REF=main
+
+# --- Paths -------------------------------------------------------------------
+APP_ROOT=/opt/mailpanel
+RELEASES_ROOT=/opt/mailpanel-releases
+REPO_CACHE=/opt/mailpanel-repo
+
+# The single source of truth for runtime secrets. Lives outside every release so
+# a deploy never overwrites it and a rollback never reverts it.
+SHARED_ENV=/etc/mailpanel/.env
+
+KEEP_RELEASES=5
+
+# --- System ------------------------------------------------------------------
+WEB_USER=www-data
+PHP_FPM_SERVICE=php8.3-fpm
+COMPOSER=composer
+
+# Host used for the post-deploy health check. With a separate admin hostname,
+# point this at the tenant panel hostname.
+HEALTHCHECK_HOST=localhost

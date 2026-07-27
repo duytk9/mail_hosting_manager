@@ -1,0 +1,33 @@
+# MailPanel installer configuration.
+#
+# Copy to deploy/install.conf to pre-answer the prompts. Required for
+# --unattended; optional otherwise (any value set here skips its question).
+#
+#   cp deploy/install.conf.example deploy/install.conf
+#   nano deploy/install.conf
+#   sudo bash deploy/install.sh --unattended
+#
+# Contains NO passwords. The installer generates the database password, the
+# APP_KEY and the first admin password itself, writes them to /etc/mailpanel/.env
+# and /root/mailpanel-credentials.txt, and prints the admin password once.
+
+# Hostname tenant admins use to reach the panel. Must resolve to this server
+# before you can obtain a real TLS certificate.
+PANEL_HOSTNAME=mail.example.com
+
+# First super admin.
+ADMIN_EMAIL=admin@example.com
+ADMIN_USERNAME=opsadmin
+
+# Address Let's Encrypt sends expiry notices to.
+ACME_EMAIL=admin@example.com
+
+# Where the application is installed.
+APP_ROOT=/opt/mailpanel
+
+# SSH port to allow through UFW. When omitted, the installer detects the port
+# from the current SSH session or sshd configuration before falling back to 22.
+# SSH_PORT=22
+
+# Roundcube version fetched when webmail is enabled.
+# ROUNDCUBE_VERSION=1.6.17

@@ -35,7 +35,10 @@ final class ResponseSecurityHeadersTest extends TestCase
         $csp = (string) ($headers['Content-Security-Policy'] ?? '');
 
         $this->assertStringContainsString("script-src 'self'", $csp);
-        $this->assertStringContainsString("style-src 'self' https://fonts.googleapis.com", $csp);
+        $this->assertStringContainsString("style-src 'self'", $csp);
+        $this->assertStringContainsString("font-src 'self' data:", $csp);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $csp);
+        $this->assertStringNotContainsString('fonts.gstatic.com', $csp);
         $this->assertStringNotContainsString('unsafe-inline', $csp);
         $this->assertStringNotContainsString('unsafe-eval', $csp);
     }

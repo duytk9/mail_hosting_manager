@@ -169,7 +169,7 @@ CONF, [
         add_header Referrer-Policy "same-origin" always;
         # Roundcube renders inline script/style and some plugins use eval-like legacy JS.
         # Keep this relaxed policy scoped to the webmail PHP location only; the panel CSP remains strict.
-        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: https: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-src 'self' blob:; frame-ancestors 'self'; form-action 'self'" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: https: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-src 'self' blob:; frame-ancestors 'self'; form-action 'self'" always;
     }
 
     location ^~ /qa/ {

@@ -28,6 +28,17 @@ $supersededMigrations = [
     '010_add_foreign_keys.sql',
 ];
 
+$checksumTransitions = [
+    // Migration 014 originally dropped indexes that were still required by
+    // foreign keys on a fresh database. Existing installations already have
+    // equivalent replacement indexes from the former migration 011, so this
+    // tightly bound old->new checksum transition is schema-compatible.
+    '014_optimize_operational_indexes.sql' => [
+        'fd1e6377805ca8df08495c285383575ffb6627725b66b961f48f6743e97008af'
+            => 'e9247b733043083d763f7fae6191df80ce69aec73fef390d7494072f9d344f74',
+    ],
+];
+
 $files = array_values(array_filter(
     glob($basePath . '/database/migrations/*.sql') ?: [],
     static fn (string $file): bool => !in_array(basename($file), $supersededMigrations, true)
@@ -38,7 +49,7 @@ assertUniqueMigrationVersions($files);
 ensureMigrationTable($pdo);
 
 if ($options['status']) {
-    printMigrationStatus($pdo, $files);
+    printMigrationStatus($pdo, $files, $checksumTransitions);
     exit(0);
 }
 
@@ -62,7 +73,7 @@ foreach ($files as $file) {
     $checksum = checksum($file);
 
     if (isset($applied[$name])) {
-        if (!hash_equals((string) $applied[$name], $checksum)) {
+        if (!checksumIsAccepted($name, (string) $applied[$name], $checksum, $checksumTransitions)) {
             throw new RuntimeException("Applied migration file was modified: checksum mismatch for [{$name}]. Migrations are immutable.");
         }
 
@@ -141,19 +152,38 @@ function baselineExistingDatabase(PDO $pdo, array $files): void
     }
 }
 
-function printMigrationStatus(PDO $pdo, array $files): void
+function printMigrationStatus(PDO $pdo, array $files, array $checksumTransitions): void
 {
     $applied = appliedMigrations($pdo);
 
     foreach ($files as $file) {
         $name = basename($file);
         $checksum = checksum($file);
-        $status = isset($applied[$name])
-            ? (hash_equals((string) $applied[$name], $checksum) ? 'applied' : 'checksum-mismatch')
-            : 'pending';
+        if (!isset($applied[$name])) {
+            $status = 'pending';
+        } elseif (hash_equals((string) $applied[$name], $checksum)) {
+            $status = 'applied';
+        } elseif (checksumTransitionAllowed($name, (string) $applied[$name], $checksum, $checksumTransitions)) {
+            $status = 'applied-compatible';
+        } else {
+            $status = 'checksum-mismatch';
+        }
 
         echo $status . ' ' . $name . PHP_EOL;
     }
+}
+
+function checksumIsAccepted(string $name, string $applied, string $current, array $checksumTransitions): bool
+{
+    return hash_equals($applied, $current)
+        || checksumTransitionAllowed($name, $applied, $current, $checksumTransitions);
+}
+
+function checksumTransitionAllowed(string $name, string $applied, string $current, array $checksumTransitions): bool
+{
+    $expectedCurrent = $checksumTransitions[$name][$applied] ?? null;
+
+    return is_string($expectedCurrent) && hash_equals($expectedCurrent, $current);
 }
 
 function checksum(string $file): string

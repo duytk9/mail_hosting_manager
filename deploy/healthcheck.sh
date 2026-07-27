@@ -235,15 +235,17 @@ if [[ -f "$SHARED_ENV" ]] && (cd "$APP_ROOT" 2>/dev/null && php -r '
   pass "database reachable"
 
   status_out="$(cd "$APP_ROOT" && php scripts/migrate.php --status 2>/dev/null || true)"
-  if echo "$status_out" | grep -q '^Pending: 0'; then
-    pass "no pending migrations"
-  else
+  if echo "$status_out" | grep -q '^checksum-mismatch '; then
+    fail "migration checksum mismatch" "Do not edit applied migrations; reconcile the recorded checksum before deploying."
+  elif echo "$status_out" | grep -q '^pending '; then
     fail "pending migrations" "cd $APP_ROOT && php scripts/migrate.php"
+  else
+    pass "no pending migrations or checksum mismatches"
   fi
 
-  if echo "$status_out" | grep -q 'Changed after apply'; then
-    warn "a migration file changed after it was applied" \
-         "Create a new migration instead of editing an applied one."
+  if echo "$status_out" | grep -q '^applied-compatible '; then
+    warn "a migration uses an approved checksum transition" \
+         "This is expected for the migration-014 foreign-key index repair."
   fi
 
   # Dovecot authenticates mail users against these three tables. The grants are

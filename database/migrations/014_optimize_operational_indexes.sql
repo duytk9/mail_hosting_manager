@@ -42,6 +42,25 @@ ALTER TABLE audit_logs
 ALTER TABLE rate_limits
     ADD INDEX IF NOT EXISTS idx_rate_limits_expires_at (expires_at);
 
+-- Keep replacement indexes in place before retiring the original migration-010
+-- names. MariaDB refuses to drop the only index that supports a foreign key.
+ALTER TABLE aliases
+    ADD INDEX IF NOT EXISTS idx_aliases_destination_mailbox_id (destination_mailbox_id);
+
+ALTER TABLE mailbox_password_history
+    ADD INDEX IF NOT EXISTS idx_mph_mailbox_id (mailbox_id);
+
+ALTER TABLE dkim_keys
+    ADD INDEX IF NOT EXISTS idx_dkim_keys_domain_id (domain_id);
+
+ALTER TABLE spam_policies
+    ADD INDEX IF NOT EXISTS idx_spam_policies_tenant_id (tenant_id),
+    ADD INDEX IF NOT EXISTS idx_spam_policies_domain_id (domain_id),
+    ADD INDEX IF NOT EXISTS idx_spam_policies_mailbox_id (mailbox_id);
+
+ALTER TABLE users
+    ADD INDEX IF NOT EXISTS idx_users_role_deleted_at (role, deleted_at);
+
 ALTER TABLE aliases DROP INDEX IF EXISTS idx_aliases_dest_mailbox;
 ALTER TABLE aliases DROP INDEX IF EXISTS idx_aliases_domain;
 ALTER TABLE aliases DROP INDEX IF EXISTS idx_aliases_tenant;

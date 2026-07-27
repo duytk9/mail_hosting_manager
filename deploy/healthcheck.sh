@@ -249,7 +249,9 @@ if [[ -f "$SHARED_ENV" ]] && (cd "$APP_ROOT" 2>/dev/null && php -r '
 ' >/dev/null 2>&1); then
   pass "database reachable"
 
-  status_out="$(cd "$APP_ROOT" && php scripts/migrate.php --status 2>/dev/null || true)"
+  if ! status_out="$(cd "$APP_ROOT" && php scripts/migrate.php --status 2>/dev/null)"; then
+    status_out=""
+  fi
   if echo "$status_out" | grep -q '^checksum-mismatch '; then
     fail "migration checksum mismatch" "Do not edit applied migrations; reconcile the recorded checksum before deploying."
   elif echo "$status_out" | grep -q '^pending '; then

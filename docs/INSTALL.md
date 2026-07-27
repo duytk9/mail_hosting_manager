@@ -84,6 +84,36 @@ git clone https://github.com/duytk9/mail_hosting_manager.git /opt/mailpanel
 cd /opt/mailpanel
 ```
 
+Chạy installer một lệnh:
+
+```bash
+sudo bash deploy/install.sh
+```
+
+Trên máy mới, installer nhận diện Nginx chưa được MailPanel quản lý và thực
+hiện quy trình an toàn sau:
+
+1. Sao lưu toàn bộ `/etc/nginx` vào `/root/mailpanel-nginx-backups`.
+2. Vô hiệu hóa mọi mục trong `sites-enabled` và mọi file `conf.d/*.conf`.
+3. Sinh cấu hình MailPanel, chạy `nginx -t`, enable và restart Nginx.
+4. Chỉ ghi marker `/etc/mailpanel/nginx-managed` sau khi Nginx thực sự active.
+5. Tự khôi phục backup nếu installer dừng hoặc Nginx không kích hoạt được.
+
+Các lần chạy lại giữ nguyên Nginx khi marker hoặc cấu hình MailPanel khỏe mạnh
+đã tồn tại. Có thể điều khiển rõ ràng bằng:
+
+```bash
+# Ép sao lưu và reset lại các vhost đang được nạp.
+sudo bash deploy/install.sh --reset-nginx
+
+# Không reset; installer sẽ dừng nếu vhost khác còn chiếm default_server.
+sudo bash deploy/install.sh --preserve-nginx
+```
+
+`--reset-nginx` phù hợp cho máy mail chuyên dụng. Nếu máy đang phục vụ website
+khác, kiểm tra backup và dùng `--preserve-nginx` hoặc tách website sang máy
+khác trước khi cài.
+
 Nếu deploy từ source đã có sẵn:
 
 ```bash

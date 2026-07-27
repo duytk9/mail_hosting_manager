@@ -27,6 +27,12 @@ Installer tạo secrets ở ngoài repository, cài đầy đủ mail stack và 
 đăng nhập lần đầu. Có thể dùng `deploy/install.conf.example` cho chế độ
 `--unattended`.
 
+Trên máy chưa được MailPanel quản lý, installer tự sao lưu `/etc/nginx` vào
+`/root/mailpanel-nginx-backups`, vô hiệu hóa các vhost đang được nạp và kích
+hoạt cấu hình MailPanel mới. Nếu `nginx -t` hoặc restart thất bại, cấu hình cũ
+được khôi phục tự động. Dùng `--reset-nginx` để ép reset khi cài lại, hoặc
+`--preserve-nginx` nếu chủ động giữ cấu hình Nginx hiện hữu.
+
 Các lần cập nhật sau dùng một trong hai mô hình release (không trộn cả hai):
 
 - `deploy/deploy.sh`: đẩy release từ máy trạm qua SSH/rsync.

@@ -110,4 +110,33 @@ final class DeploymentScriptsTest extends TestCase
         $this->assertStringContainsString('$connection->beginTransaction();', $utility);
         $this->assertStringContainsString('$connection->rollBack();', $utility);
     }
+
+    public function test_fresh_install_resets_nginx_with_backup_and_automatic_restore(): void
+    {
+        $root = dirname(__DIR__);
+        $installer = (string) file_get_contents($root . '/deploy/install.sh');
+        $readme = (string) file_get_contents($root . '/README.md');
+        $installGuide = (string) file_get_contents($root . '/docs/INSTALL.md');
+
+        $this->assertStringContainsString('NGINX_RESET_MODE=auto', $installer);
+        $this->assertStringContainsString('--reset-nginx', $installer);
+        $this->assertStringContainsString('--preserve-nginx', $installer);
+        $this->assertStringContainsString('tar -czf "$NGINX_BACKUP_DIR/etc-nginx.tar.gz" -C / etc/nginx', $installer);
+        $this->assertStringContainsString('sha256sum -c SHA256SUMS', $installer);
+        $this->assertStringContainsString('find /etc/nginx/sites-enabled -mindepth 1 -maxdepth 1', $installer);
+        $this->assertStringContainsString("find /etc/nginx/conf.d -mindepth 1 -maxdepth 1 -name '*.conf'", $installer);
+        $this->assertStringContainsString('restore_nginx_configuration()', $installer);
+        $this->assertStringContainsString('rollback_pending_nginx_reset()', $installer);
+        $this->assertStringContainsString('trap on_install_exit EXIT', $installer);
+        $this->assertStringContainsString('systemctl is-active --quiet nginx', $installer);
+        $this->assertStringContainsString('"$NGINX_MANAGED_MARKER"', $installer);
+        $this->assertStringContainsString('/root/mailpanel-nginx-backups', $readme);
+        $this->assertStringContainsString('/etc/mailpanel/nginx-managed', $installGuide);
+
+        $readyPosition = strpos($installer, 'NGINX_READY=1');
+        $markerPosition = strpos($installer, 'install -o root -g root -m 0644 "$NGINX_MARKER_TMP" "$NGINX_MANAGED_MARKER"');
+        $this->assertIsInt($readyPosition);
+        $this->assertIsInt($markerPosition);
+        $this->assertGreaterThan($readyPosition, $markerPosition, 'The managed marker must be written only after Nginx is ready.');
+    }
 }

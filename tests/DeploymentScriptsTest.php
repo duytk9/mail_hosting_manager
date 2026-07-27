@@ -31,4 +31,12 @@ final class DeploymentScriptsTest extends TestCase
         );
         $this->assertStringContainsString('chmod 2750 /var/lib/mailpanel', $installer);
     }
+
+    public function test_pull_deployment_does_not_export_composers_reserved_config_variable(): void
+    {
+        $script = (string) file_get_contents(dirname(__DIR__) . '/deploy/deploy-from-git.sh');
+
+        $this->assertStringContainsString('COMPOSER_BIN', $script);
+        $this->assertStringNotContainsString('COMPOSER="', $script);
+    }
 }

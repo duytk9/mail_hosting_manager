@@ -29,7 +29,7 @@ KEEP_RELEASES=5
 # --- System ------------------------------------------------------------------
 WEB_USER=www-data
 PHP_FPM_SERVICE=php8.3-fpm
-COMPOSER=composer
+COMPOSER_BIN=composer
 
 # Host used for the post-deploy health check. With a separate admin hostname,
 # point this at the tenant panel hostname.

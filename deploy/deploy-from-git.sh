@@ -37,7 +37,7 @@ KEEP_RELEASES="${KEEP_RELEASES:-5}"
 WEB_USER="${WEB_USER:-www-data}"
 AGENT_USER="${AGENT_USER:-mailpanel-agent}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php8.3-fpm}"
-COMPOSER="${COMPOSER:-composer}"
+COMPOSER_BIN="${COMPOSER_BIN:-composer}"
 HEALTHCHECK_HOST="${HEALTHCHECK_HOST:-localhost}"
 
 DRY_RUN=0
@@ -113,7 +113,7 @@ fi
 
 command -v git >/dev/null || die "git is not installed. apt-get install -y git"
 command -v php >/dev/null || die "php is not installed."
-command -v "$COMPOSER" >/dev/null || die "composer is not installed or COMPOSER points nowhere."
+command -v "$COMPOSER_BIN" >/dev/null || die "composer is not installed or COMPOSER_BIN points nowhere."
 
 if [[ "$MODE" == "status" ]]; then
   step "Releases"
@@ -223,7 +223,7 @@ as_root ln -sfn "$SHARED_ENV" "$RELEASE_DIR/.env"
 ok ".env in place"
 
 step "Installing PHP dependencies (no dev)"
-(cd "$RELEASE_DIR" && "$COMPOSER" install --no-dev --optimize-autoloader --no-interaction --no-progress 2>&1 | tail -5)
+(cd "$RELEASE_DIR" && "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction --no-progress 2>&1 | tail -5)
 ok "dependencies installed"
 
 step "Setting ownership and permissions"

@@ -226,6 +226,10 @@ step "Installing PHP dependencies (no dev)"
 (cd "$RELEASE_DIR" && "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction --no-progress 2>&1 | tail -5)
 ok "dependencies installed"
 
+step "Fetching self-hosted UI fonts"
+bash "$RELEASE_DIR/deploy/fetch-fonts.sh" "$RELEASE_DIR/public/assets/fonts"
+ok "UI fonts ready"
+
 step "Setting ownership and permissions"
 as_root chown -R root:"$WEB_USER" "$RELEASE_DIR"
 as_root find "$RELEASE_DIR" -type d -exec chmod 0750 {} +

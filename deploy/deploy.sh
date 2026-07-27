@@ -197,6 +197,10 @@ step "Installing PHP dependencies (no dev)"
 remote "cd '$RELEASE_DIR' && composer install --no-dev --optimize-autoloader --no-interaction --no-progress 2>&1 | tail -5"
 ok "dependencies installed"
 
+step "Fetching self-hosted UI fonts"
+remote "bash '$RELEASE_DIR/deploy/fetch-fonts.sh' '$RELEASE_DIR/public/assets/fonts'"
+ok "UI fonts ready"
+
 step "Fixing ownership and permissions"
 remote_root "set -euo pipefail
   chown -R root:'$WEB_USER' '$RELEASE_DIR'

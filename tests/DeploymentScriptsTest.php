@@ -17,6 +17,7 @@ final class DeploymentScriptsTest extends TestCase
             $this->assertStringContainsString('SHARED_STORAGE_ROOT', $script);
             $this->assertStringContainsString('logs sessions cache generated rate_limits app_settings', $script);
             $this->assertStringContainsString('ln -s', $script);
+            $this->assertStringContainsString('fetch-fonts.sh', $script);
         }
     }
 

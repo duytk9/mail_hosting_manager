@@ -554,7 +554,7 @@ set +e
 php scripts/migrate.php >"$MIGRATE_OUT" 2>&1
 MIGRATE_STATUS=$?
 set -e
-cat "$MIGRATE_OUT" | tee -a "$LOG_FILE"
+tee -a "$LOG_FILE" <"$MIGRATE_OUT"
 
 if [[ "$MIGRATE_STATUS" != "0" ]]; then
   printf '\n%s─── migration error ───%s\n' "$C_ERR" "$C_OFF" >&2
@@ -598,18 +598,31 @@ ok "dovecot may read mailboxes, domains and tenants (nothing else)"
 
 step "Creating the first super admin"
 
-if php bin/admin_account.php status --email="$ADMIN_EMAIL" >/dev/null 2>&1; then
+ADMIN_ACCOUNT_CLI="$APP_ROOT/scripts/admin_account.php"
+[[ -f "$ADMIN_ACCOUNT_CLI" ]] || die "Admin account utility is missing: $ADMIN_ACCOUNT_CLI"
+
+if php "$ADMIN_ACCOUNT_CLI" status --email="$ADMIN_EMAIL" >/dev/null 2>&1; then
   skip "an account already exists for $ADMIN_EMAIL"
   ADMIN_PASSWORD=""
 else
   # Piped on stdin so the password never appears in the process list.
-  printf '%s\n' "$ADMIN_PASSWORD" | php bin/admin_account.php create \
-    --email="$ADMIN_EMAIL" \
-    --username="$ADMIN_USERNAME" \
-    --name="Super Admin" \
-    --role=super_admin \
-    --password-stdin >>"$LOG_FILE" 2>&1 \
-    || die "Could not create the super admin. See $LOG_FILE"
+  ADMIN_CREATE_OUT="$(mktemp /tmp/mailpanel-admin-create-XXXXXX.log)"
+  if ! printf '%s\n' "$ADMIN_PASSWORD" | php "$ADMIN_ACCOUNT_CLI" create \
+      --email="$ADMIN_EMAIL" \
+      --username="$ADMIN_USERNAME" \
+      --name="Super Admin" \
+      --role=super_admin \
+      --password-stdin >"$ADMIN_CREATE_OUT" 2>&1; then
+    cat "$ADMIN_CREATE_OUT" >>"$LOG_FILE"
+    printf '\n%s─── super-admin error ───%s\n' "$C_ERR" "$C_OFF" >&2
+    tail -20 "$ADMIN_CREATE_OUT" >&2
+    printf '%s─────────────────────────%s\n\n' "$C_ERR" "$C_OFF" >&2
+    rm -f "$ADMIN_CREATE_OUT"
+    die "Could not create the super admin. See $LOG_FILE"
+  fi
+
+  cat "$ADMIN_CREATE_OUT" >>"$LOG_FILE"
+  rm -f "$ADMIN_CREATE_OUT"
   ok "super admin created"
 fi
 
@@ -748,7 +761,7 @@ set +e
 sudo -u "$WEB_USER" php "$APPLY_SCRIPT" "$APP_ROOT" >"$APPLY_SCRIPT.out" 2>&1
 APPLY_STATUS=$?
 set -e
-cat "$APPLY_SCRIPT.out" | tee -a "$LOG_FILE"
+tee -a "$LOG_FILE" <"$APPLY_SCRIPT.out"
 rm -f "$APPLY_SCRIPT" "$APPLY_SCRIPT.out"
 
 if [[ "$APPLY_STATUS" == "0" ]]; then

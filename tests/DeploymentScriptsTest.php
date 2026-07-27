@@ -94,4 +94,20 @@ final class DeploymentScriptsTest extends TestCase
         $this->assertStringContainsString("printf 'GIT_REMOTE=%q\\n'", $installer);
         $this->assertStringContainsString('refusing to write a Git remote containing credentials', $installer);
     }
+
+    public function test_fresh_install_uses_the_tracked_admin_account_utility(): void
+    {
+        $root = dirname(__DIR__);
+        $installer = (string) file_get_contents($root . '/deploy/install.sh');
+        $utilityPath = $root . '/scripts/admin_account.php';
+        $utility = (string) file_get_contents($utilityPath);
+
+        $this->assertFileExists($utilityPath);
+        $this->assertStringContainsString('$APP_ROOT/scripts/admin_account.php', $installer);
+        $this->assertStringNotContainsString('bin/admin_account.php', $installer);
+        $this->assertStringContainsString("['status', 'reset', 'create']", $utility);
+        $this->assertStringContainsString("if (\$command === 'create')", $utility);
+        $this->assertStringContainsString('$connection->beginTransaction();', $utility);
+        $this->assertStringContainsString('$connection->rollBack();', $utility);
+    }
 }

@@ -37,7 +37,7 @@ if ($command === null || in_array($command, ['-h', '--help', 'help'], true)) {
     exit(0);
 }
 
-if (!in_array($command, ['status', 'reset'], true)) {
+if (!in_array($command, ['status', 'reset', 'create'], true)) {
     fwrite(STDERR, "Unknown command [{$command}].\n\n");
     printUsage();
     exit(1);
@@ -50,6 +50,97 @@ if ($email === '') {
 }
 
 $user = $users->findByEmail($email);
+
+if ($command === 'create') {
+    if ($user !== null) {
+        fwrite(STDERR, "An account already exists for [{$email}]. Use 'reset' to change its password.\n");
+        exit(1);
+    }
+
+    if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        fwrite(STDERR, "Invalid email address [{$email}].\n");
+        exit(1);
+    }
+
+    $username = strtolower(trim((string) ($options['username'] ?? '')));
+    if (preg_match('/\A[a-z_][a-z0-9_-]{0,31}\z/', $username) !== 1) {
+        fwrite(STDERR, "Missing or invalid --username. Use 1-32 lowercase letters, numbers, underscores, or hyphens.\n");
+        exit(1);
+    }
+
+    if ($users->findByLinuxUsername($username) !== null) {
+        fwrite(STDERR, "Username [{$username}] is already taken.\n");
+        exit(1);
+    }
+
+    $role = (string) ($options['role'] ?? 'super_admin');
+    if (!in_array($role, ['super_admin', 'support_readonly'], true)) {
+        fwrite(STDERR, "Invalid --role. Only super_admin or support_readonly may be created here.\n");
+        exit(1);
+    }
+
+    $name = trim((string) ($options['name'] ?? 'Administrator'));
+    if ($name === '' || mb_strlen($name) > 150) {
+        fwrite(STDERR, "Invalid --name. Use between 1 and 150 characters.\n");
+        exit(1);
+    }
+
+    $password = readPassword($options);
+    if ($password === '') {
+        fwrite(STDERR, "Missing password. Use --password-stdin, --password-file=<path>, or --password-env=<ENV_NAME>.\n");
+        exit(1);
+    }
+
+    $connection = $database->connection();
+
+    try {
+        $passwordPolicy->assertStrong($password);
+        $hash = $passwordHasher->hash($password);
+
+        $connection->beginTransaction();
+
+        $created = $users->create([
+            'tenant_id' => null,
+            'role' => $role,
+            'name' => $name,
+            'email' => $email,
+            'password_hash' => $hash,
+            'linux_username' => $username,
+            'force_password_change' => array_key_exists('force-password-change', $options) ? 1 : 0,
+        ]);
+
+        $history->store((int) $created['id'], null, $hash);
+
+        $auditLog->log([
+            'actor_id' => null,
+            'actor_role' => 'system',
+            'tenant_id' => null,
+            'action' => 'system.admin_account_created',
+            'target_type' => 'user',
+            'target_id' => $created['id'] ?? null,
+            'new_values' => ['email' => $email, 'username' => $username, 'role' => $role],
+        ]);
+
+        $connection->commit();
+    } catch (Throwable $exception) {
+        if ($connection->inTransaction()) {
+            $connection->rollBack();
+        }
+
+        fwrite(STDERR, $exception->getMessage() . PHP_EOL);
+        exit(1);
+    }
+
+    echo json_encode([
+        'status' => 'created',
+        'id' => (int) ($created['id'] ?? 0),
+        'email' => $email,
+        'username' => $username,
+        'role' => $role,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . PHP_EOL;
+    exit(0);
+}
+
 if ($user === null) {
     fwrite(STDERR, "Admin user not found for [{$email}].\n");
     exit(1);
@@ -206,6 +297,7 @@ function printUsage(): void
 {
     echo <<<TXT
 Usage:
+  printf '%s\n' '<strong-password>' | php admin_account.php create --email=admin@example.test --username=opsadmin --password-stdin [--name='Ops Admin'] [--role=super_admin] [--force-password-change]
   php admin_account.php status --email=admin@example.test
   printf '%s\n' '<new-strong-password>' | php admin_account.php reset --email=admin@example.test --password-stdin [--disable-totp] [--force-password-change]
   php admin_account.php reset --email=admin@example.test --password-file=/root/mailpanel-admin-password [--disable-totp] [--force-password-change]

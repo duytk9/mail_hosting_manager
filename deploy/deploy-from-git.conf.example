@@ -22,6 +22,7 @@ REPO_CACHE=/opt/mailpanel-repo
 # The single source of truth for runtime secrets. Lives outside every release so
 # a deploy never overwrites it and a rollback never reverts it.
 SHARED_ENV=/etc/mailpanel/.env
+SHARED_STORAGE_ROOT=/var/lib/mailpanel/storage
 
 KEEP_RELEASES=5
 

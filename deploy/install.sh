@@ -30,6 +30,7 @@ VMAIL_GID=2000
 WEB_USER=www-data
 AGENT_USER=mailpanel-agent
 GENERATED_ROOT=/var/lib/mailpanel/generated
+SHARED_STORAGE_ROOT=/var/lib/mailpanel/storage
 TLS_SNI_ROOT=/etc/mailpanel/tls/sni
 ACME_WEBROOT=/var/www/acme
 WEBMAIL_ROOT=/var/www/webmail
@@ -568,10 +569,19 @@ find "$APP_ROOT" -type d -exec chmod 0750 {} +
 find "$APP_ROOT" -type f -exec chmod 0640 {} +
 chmod 0750 "$APP_ROOT"/deploy/*.sh 2>/dev/null || true
 
+install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$SHARED_STORAGE_ROOT"
 for d in logs sessions cache generated rate_limits app_settings; do
-  install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$APP_ROOT/storage/$d"
+  shared_dir="$SHARED_STORAGE_ROOT/$d"
+  install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$shared_dir"
+  if ! find "$shared_dir" -mindepth 1 -print -quit | grep -q . \
+     && [[ -d "$APP_ROOT/storage/$d" && ! -L "$APP_ROOT/storage/$d" ]]; then
+    cp -a "$APP_ROOT/storage/$d/." "$shared_dir/"
+  fi
+  chown -R "$WEB_USER":"$WEB_USER" "$shared_dir"
+  rm -rf "$APP_ROOT/storage/$d"
+  ln -s "$shared_dir" "$APP_ROOT/storage/$d"
 done
-ok "app owned by root:$WEB_USER, storage writable by $WEB_USER"
+ok "app owned by root:$WEB_USER, runtime storage shared and writable by $WEB_USER"
 
 # --------------------------------------------------------------- webmail
 

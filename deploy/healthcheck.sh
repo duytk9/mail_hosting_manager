@@ -18,6 +18,7 @@ SHARED_ENV="${SHARED_ENV:-/etc/mailpanel/.env}"
 WEB_USER="${WEB_USER:-www-data}"
 AGENT_USER="${AGENT_USER:-mailpanel-agent}"
 GENERATED_ROOT="${GENERATED_ROOT:-/var/lib/mailpanel/generated}"
+SHARED_STORAGE_ROOT="${SHARED_STORAGE_ROOT:-/var/lib/mailpanel/storage}"
 
 QUIET=0
 [[ "${1:-}" == "--quiet" ]] && QUIET=1
@@ -120,6 +121,14 @@ for d in logs sessions cache generated rate_limits app_settings; do
   else
     fail "storage/$d not writable by $WEB_USER" \
          "install -d -m 0770 -o $WEB_USER -g $WEB_USER $APP_ROOT/storage/$d"
+  fi
+
+  if [[ -L "$APP_ROOT/storage/$d" ]] \
+     && [[ "$(readlink -f "$APP_ROOT/storage/$d")" == "$SHARED_STORAGE_ROOT/$d" ]]; then
+    pass "storage/$d uses shared runtime storage"
+  else
+    warn "storage/$d is not linked to $SHARED_STORAGE_ROOT/$d" \
+         "Run the release deployment once to migrate runtime storage."
   fi
 done
 

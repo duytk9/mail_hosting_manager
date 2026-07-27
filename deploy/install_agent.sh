@@ -15,7 +15,9 @@ install -d -m 0750 /var/lib/mailpanel /var/lib/mailpanel/generated
 install -d -m 0755 /var/lib/mailpanel/generated/nginx /var/lib/mailpanel/generated/active/nginx
 install -d -m 0755 /var/lib/mailpanel/generated/exim /var/lib/mailpanel/generated/active/exim
 install -d -m 0750 /var/lib/mailpanel/generated/dovecot /var/lib/mailpanel/generated/rspamd /var/lib/mailpanel/generated/fail2ban /var/lib/mailpanel/generated/active /var/lib/mailpanel/generated/active/dovecot /var/lib/mailpanel/generated/active/rspamd /var/lib/mailpanel/generated/active/fail2ban
-chown -R "$AGENT_USER":"$AGENT_USER" /var/lib/mailpanel
+chown -R "$AGENT_USER":"$AGENT_USER" /var/lib/mailpanel/generated
+chown root:"$AGENT_USER" /var/lib/mailpanel
+chmod 2750 /var/lib/mailpanel
 
 # The web process renders config drafts into the generated root; the agent then
 # validates and activates them. Chowning the tree to the agent alone left it
@@ -28,8 +30,8 @@ chown -R "$AGENT_USER":"$AGENT_USER" /var/lib/mailpanel
 if ! id -nG "$WEB_USER" | tr ' ' '\n' | grep -qx "$AGENT_USER"; then
   usermod -aG "$AGENT_USER" "$WEB_USER"
 fi
-find /var/lib/mailpanel -type d -exec chmod 2770 {} +
-find /var/lib/mailpanel -type f -exec chmod 0660 {} + 2>/dev/null || true
+find /var/lib/mailpanel/generated -type d -exec chmod 2770 {} +
+find /var/lib/mailpanel/generated -type f -exec chmod 0660 {} + 2>/dev/null || true
 
 install -d -m 0755 /var/log/mailpanel
 chown "$AGENT_USER":"$AGENT_USER" /var/log/mailpanel

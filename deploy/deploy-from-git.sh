@@ -32,6 +32,7 @@ APP_ROOT="${APP_ROOT:-/opt/mailpanel}"
 RELEASES_ROOT="${RELEASES_ROOT:-/opt/mailpanel-releases}"
 REPO_CACHE="${REPO_CACHE:-/opt/mailpanel-repo}"
 SHARED_ENV="${SHARED_ENV:-/etc/mailpanel/.env}"
+SHARED_STORAGE_ROOT="${SHARED_STORAGE_ROOT:-/var/lib/mailpanel/storage}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 WEB_USER="${WEB_USER:-www-data}"
 AGENT_USER="${AGENT_USER:-mailpanel-agent}"
@@ -78,6 +79,7 @@ as_root() {
 if [[ "$MODE" == "bootstrap" ]]; then
   step "First-time setup"
   as_root install -d -m 0755 "$RELEASES_ROOT" "$(dirname "$SHARED_ENV")"
+  as_root install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$SHARED_STORAGE_ROOT"
   as_root install -d -m 0755 "$(dirname "$REPO_CACHE")"
 
   if [[ ! -f "$SHARED_ENV" ]]; then
@@ -229,8 +231,23 @@ as_root chown -R root:"$WEB_USER" "$RELEASE_DIR"
 as_root find "$RELEASE_DIR" -type d -exec chmod 0750 {} +
 as_root find "$RELEASE_DIR" -type f -exec chmod 0640 {} +
 as_root chmod 0750 "$RELEASE_DIR"/deploy/*.sh 2>/dev/null || true
+
+as_root install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$SHARED_STORAGE_ROOT"
 for d in logs sessions cache generated rate_limits app_settings; do
-  as_root install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$RELEASE_DIR/storage/$d"
+  shared_dir="$SHARED_STORAGE_ROOT/$d"
+  as_root install -d -m 0770 -o "$WEB_USER" -g "$WEB_USER" "$shared_dir"
+
+  # One-time migration from the pre-release layout. Never overwrite shared
+  # runtime state on later deploys or rollbacks.
+  if ! as_root find "$shared_dir" -mindepth 1 -print -quit | grep -q . \
+     && as_root test -d "$APP_ROOT/storage/$d"; then
+    as_root cp -a "$APP_ROOT/storage/$d/." "$shared_dir/"
+  fi
+
+  as_root chown -R "$WEB_USER":"$WEB_USER" "$shared_dir"
+  as_root chmod 0770 "$shared_dir"
+  as_root rm -rf "$RELEASE_DIR/storage/$d"
+  as_root ln -s "$shared_dir" "$RELEASE_DIR/storage/$d"
 done
 ok "permissions set"
 

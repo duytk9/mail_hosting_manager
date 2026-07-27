@@ -32,6 +32,7 @@ SSH_PORT="${SSH_PORT:-22}"
 APP_ROOT="${APP_ROOT:-/opt/mailpanel}"
 RELEASES_ROOT="${RELEASES_ROOT:-/opt/mailpanel-releases}"
 SHARED_ENV="${SHARED_ENV:-/etc/mailpanel/.env}"
+SHARED_STORAGE_ROOT="${SHARED_STORAGE_ROOT:-/var/lib/mailpanel/storage}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 WEB_USER="${WEB_USER:-www-data}"
 AGENT_USER="${AGENT_USER:-mailpanel-agent}"
@@ -202,10 +203,19 @@ remote_root "set -euo pipefail
   find '$RELEASE_DIR' -type d -exec chmod 0750 {} +
   find '$RELEASE_DIR' -type f -exec chmod 0640 {} +
   chmod 0750 '$RELEASE_DIR/deploy'/*.sh 2>/dev/null || true
-  install -d -m 0770 -o '$WEB_USER' -g '$WEB_USER' \
-    '$RELEASE_DIR/storage/logs' '$RELEASE_DIR/storage/sessions' \
-    '$RELEASE_DIR/storage/cache' '$RELEASE_DIR/storage/generated' \
-    '$RELEASE_DIR/storage/rate_limits' '$RELEASE_DIR/storage/app_settings'"
+  install -d -m 0770 -o '$WEB_USER' -g '$WEB_USER' '$SHARED_STORAGE_ROOT'
+  for d in logs sessions cache generated rate_limits app_settings; do
+    shared_dir='$SHARED_STORAGE_ROOT'/\"\$d\"
+    install -d -m 0770 -o '$WEB_USER' -g '$WEB_USER' \"\$shared_dir\"
+    if ! find \"\$shared_dir\" -mindepth 1 -print -quit | grep -q . \
+       && [[ -d '$APP_ROOT/storage'/\"\$d\" ]]; then
+      cp -a '$APP_ROOT/storage'/\"\$d\"/. \"\$shared_dir\"/
+    fi
+    chown -R '$WEB_USER':'$WEB_USER' \"\$shared_dir\"
+    chmod 0770 \"\$shared_dir\"
+    rm -rf '$RELEASE_DIR/storage'/\"\$d\"
+    ln -s \"\$shared_dir\" '$RELEASE_DIR/storage'/\"\$d\"
+  done"
 ok "permissions set"
 
 # The privileged agent lives outside the release directory (/usr/local/bin and

@@ -35,6 +35,14 @@ TLS_SNI_ROOT=/etc/mailpanel/tls/sni
 ACME_WEBROOT=/var/www/acme
 WEBMAIL_ROOT=/var/www/webmail
 ROUNDCUBE_VERSION="${ROUNDCUBE_VERSION:-1.6.17}"
+ROUNDCUBE_SHA256="${ROUNDCUBE_SHA256:-}"
+DEPLOY_CONF="${DEPLOY_CONF:-/etc/mailpanel/deploy.conf}"
+DEPLOY_GIT_REMOTE="${DEPLOY_GIT_REMOTE:-}"
+DEPLOY_GIT_REF="${DEPLOY_GIT_REF:-main}"
+
+if [[ "$ROUNDCUBE_VERSION" == "1.6.17" && -z "$ROUNDCUBE_SHA256" ]]; then
+  ROUNDCUBE_SHA256="e1f6c437959cb8dffda1a3e59f0c0a2160b3d669948db69bb02edb218c8e69a1"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -82,12 +90,17 @@ run() { echo "+ $*" >>"$LOG_FILE"; "$@" >>"$LOG_FILE" 2>&1; }
 
 [[ "$(id -u)" == "0" ]] || die "Run as root:  sudo bash deploy/install.sh"
 
-mkdir -p "$(dirname "$LOG_FILE")"
-: >"$LOG_FILE"
-chmod 0600 "$LOG_FILE"
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  LOG_FILE=/dev/null
+else
+  mkdir -p "$(dirname "$LOG_FILE")"
+  : >"$LOG_FILE"
+  chmod 0600 "$LOG_FILE"
+fi
 
 step "Preflight"
 
+# shellcheck source=/dev/null
 . /etc/os-release 2>/dev/null || die "Cannot read /etc/os-release; this installer targets Ubuntu."
 [[ "${ID:-}" == "ubuntu" ]] || warn "Tested on Ubuntu; found ${PRETTY_NAME:-unknown}. Continuing."
 case "${VERSION_ID:-}" in
@@ -169,6 +182,7 @@ ask APP_ROOT       "Install directory" "$APP_ROOT_DEFAULT"
 # Secrets are generated, never prompted, and never echoed.
 DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)"
 APP_KEY="base64:$(openssl rand -base64 32)"
+TOTP_ENCRYPTION_KEY="base64:$(openssl rand -base64 32)"
 ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)Aa1!"
 
 ok "Panel hostname : $PANEL_HOSTNAME"
@@ -306,6 +320,54 @@ cd "$APP_ROOT"
 run composer install --no-dev --optimize-autoloader --no-interaction --no-progress
 ok "PHP dependencies installed"
 
+# --------------------------------------------------------- pull deployment
+
+step "Configuring pull deployment"
+
+[[ "$DEPLOY_CONF" =~ ^/[A-Za-z0-9._/-]+$ && "$DEPLOY_CONF" != "/" && "$DEPLOY_CONF" != *"/../"* ]] \
+  || die "DEPLOY_CONF must be a safe absolute path."
+
+if [[ -f "$DEPLOY_CONF" ]]; then
+  skip "$DEPLOY_CONF already exists; leaving it unchanged"
+else
+  if [[ -z "$DEPLOY_GIT_REMOTE" && -d "$REPO_ROOT/.git" ]]; then
+    DEPLOY_GIT_REMOTE="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$DEPLOY_GIT_REMOTE" ]]; then
+    warn "no Git remote detected; create $DEPLOY_CONF from deploy/deploy-from-git.conf.example"
+  elif [[ "$DEPLOY_GIT_REMOTE" == *$'\n'* || "$DEPLOY_GIT_REMOTE" == *$'\r'* \
+       || "$DEPLOY_GIT_REMOTE" =~ ^https?://[^/]+@ ]]; then
+    warn "refusing to write a Git remote containing credentials or control characters"
+  else
+    [[ "$DEPLOY_GIT_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$DEPLOY_GIT_REF" != *".."* ]] \
+      || die "Invalid DEPLOY_GIT_REF."
+    install -d -m 0755 "$(dirname "$DEPLOY_CONF")"
+    {
+      printf 'GIT_REMOTE=%q\n' "$DEPLOY_GIT_REMOTE"
+      printf 'GIT_REF=%q\n' "$DEPLOY_GIT_REF"
+      printf 'APP_ROOT=%q\n' "$APP_ROOT"
+      printf 'RELEASES_ROOT=%q\n' "/opt/mailpanel-releases"
+      printf 'REPO_CACHE=%q\n' "/opt/mailpanel-repo"
+      printf 'SHARED_ENV=%q\n' "$SHARED_ENV"
+      printf 'SHARED_STORAGE_ROOT=%q\n' "$SHARED_STORAGE_ROOT"
+      printf 'PREVIOUS_LINK=%q\n' "${APP_ROOT}-previous"
+      printf 'DEPLOY_LOCK_FILE=%q\n' "/var/lock/mailpanel-deploy.lock"
+      printf 'KEEP_RELEASES=5\n'
+      printf 'WEB_USER=%q\n' "$WEB_USER"
+      printf 'AGENT_USER=%q\n' "$AGENT_USER"
+      printf 'PHP_FPM_SERVICE=php8.3-fpm\n'
+      printf 'COMPOSER_BIN=composer\n'
+      printf 'HEALTHCHECK_HOST=localhost\n'
+      printf 'UPGRADE_ROUNDCUBE=1\n'
+      printf 'ROUNDCUBE_VERSION=%q\n' "$ROUNDCUBE_VERSION"
+    } >"$DEPLOY_CONF"
+    chown root:root "$DEPLOY_CONF"
+    chmod 0644 "$DEPLOY_CONF"
+    ok "pull deployment configured at $DEPLOY_CONF"
+  fi
+fi
+
 # --------------------------------------------------------------- database
 
 step "Configuring MariaDB"
@@ -425,7 +487,7 @@ SESSION_COOKIE_DOMAIN=
 
 SUPER_ADMIN_IP_ALLOWLIST_ENABLED=false
 SUPER_ADMIN_IP_ALLOWLIST=0.0.0.0/0
-TOTP_ENCRYPTION_KEY=
+TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}
 
 TENANT_EXPIRY_WARNING_DAYS=14
 TENANT_DEFAULT_GRACE_DAYS=7
@@ -589,11 +651,17 @@ if [[ "$WITH_WEBMAIL" == "1" ]]; then
   step "Installing Roundcube $ROUNDCUBE_VERSION"
 
   if [[ -f "$WEBMAIL_ROOT/index.php" ]]; then
-    skip "webmail already installed at $WEBMAIL_ROOT"
+    run env ROUNDCUBE_VERSION="$ROUNDCUBE_VERSION" ROUNDCUBE_SHA256="$ROUNDCUBE_SHA256" \
+      WEB_USER="$WEB_USER" PHP_FPM_SERVICE=php8.3-fpm bash "$APP_ROOT/deploy/upgrade_roundcube.sh"
+    ok "existing webmail checked and upgraded when needed"
   else
+    [[ "$ROUNDCUBE_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] \
+      || die "Set ROUNDCUBE_SHA256 for Roundcube $ROUNDCUBE_VERSION."
     TARBALL="/tmp/roundcube-${ROUNDCUBE_VERSION}.tar.gz"
     run curl -fsSL -o "$TARBALL" \
       "https://github.com/roundcube/roundcubemail/releases/download/${ROUNDCUBE_VERSION}/roundcubemail-${ROUNDCUBE_VERSION}-complete.tar.gz"
+    printf '%s  %s\n' "$ROUNDCUBE_SHA256" "$TARBALL" | sha256sum -c - >>"$LOG_FILE" 2>&1 \
+      || die "Roundcube release checksum verification failed."
 
     install -d -m 0755 "$WEBMAIL_ROOT"
     run tar -xzf "$TARBALL" -C "$WEBMAIL_ROOT" --strip-components=1

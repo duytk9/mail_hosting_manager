@@ -52,9 +52,11 @@ for svc in nginx php8.3-fpm mariadb exim4 dovecot rspamd fail2ban; do
 done
 
 if systemctl list-unit-files 2>/dev/null | grep -q '^clamav-daemon'; then
-  systemctl is-active --quiet clamav-daemon \
-    && pass "clamav-daemon running" \
-    || warn "clamav-daemon not running" "It is memory-hungry; disable it if this box is small."
+  if systemctl is-active --quiet clamav-daemon; then
+    pass "clamav-daemon running"
+  else
+    warn "clamav-daemon not running" "It is memory-hungry; disable it if this box is small."
+  fi
 fi
 
 # ------------------------------------------------------------------- ports
@@ -150,9 +152,11 @@ section "Privilege separation"
 
 if [[ -f /usr/local/bin/mailpanel-system-wrapper ]]; then
   perms="$(stat -c '%a %U:%G' /usr/local/bin/mailpanel-system-wrapper)"
-  [[ "$perms" == "755 root:root" ]] \
-    && pass "wrapper $perms" \
-    || fail "wrapper is $perms, expected 755 root:root"
+  if [[ "$perms" == "755 root:root" ]]; then
+    pass "wrapper $perms"
+  else
+    fail "wrapper is $perms, expected 755 root:root"
+  fi
 else
   fail "mailpanel-system-wrapper missing" "bash $APP_ROOT/deploy/install_agent.sh"
 fi
@@ -234,6 +238,8 @@ section "Database"
 
 # getcwd(), not __DIR__: inside `php -r` the latter does not reliably resolve to
 # the application root.
+# The PHP source is deliberately single-quoted so the shell cannot expand it.
+# shellcheck disable=SC2016
 if [[ -f "$SHARED_ENV" ]] && (cd "$APP_ROOT" 2>/dev/null && php -r '
     $root = getcwd();
     require $root . "/vendor/autoload.php";

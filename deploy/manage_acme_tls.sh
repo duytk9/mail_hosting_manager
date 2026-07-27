@@ -79,6 +79,21 @@ csv_to_lines() {
   printf '%s\n' "${1:-}" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+expand_host_pattern() {
+  local pattern="$1"
+  local domain="$2"
+  [[ "$pattern" == *'%s'* ]] || {
+    echo "Invalid host pattern (missing %s): $pattern" >&2
+    exit 64
+  }
+  pattern="${pattern//\%s/$domain}"
+  [[ "$pattern" != *'%'* ]] || {
+    echo "Invalid host pattern: $pattern" >&2
+    exit 64
+  }
+  printf '%s\n' "$pattern"
+}
+
 domain_hosts() {
   local domain="$1"
   local -a hosts=()
@@ -90,13 +105,13 @@ domain_hosts() {
 
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] || continue
-    host="$(printf "$pattern" "$domain")"
+    host="$(expand_host_pattern "$pattern" "$domain")"
     hosts+=("$(normalize_domain "$host")")
   done < <(csv_to_lines "$ACME_MAIL_HOST_PATTERNS")
 
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] || continue
-    host="$(printf "$pattern" "$domain")"
+    host="$(expand_host_pattern "$pattern" "$domain")"
     hosts+=("$(normalize_domain "$host")")
   done < <(csv_to_lines "$ACME_WEB_HOST_PATTERNS")
 

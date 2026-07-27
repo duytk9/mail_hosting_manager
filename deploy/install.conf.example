@@ -25,9 +25,16 @@ ACME_EMAIL=admin@example.com
 # Where the application is installed.
 APP_ROOT=/opt/mailpanel
 
+# Pull deployment is configured automatically from this clone's origin.
+# Override only when the deploy server should fetch from another remote/ref.
+# DEPLOY_GIT_REMOTE=https://github.com/duytk9/mail_hosting_manager.git
+# DEPLOY_GIT_REF=main
+
 # SSH port to allow through UFW. When omitted, the installer detects the port
 # from the current SSH session or sshd configuration before falling back to 22.
 # SSH_PORT=22
 
 # Roundcube version fetched when webmail is enabled.
 # ROUNDCUBE_VERSION=1.6.17
+# For other versions, pin the SHA-256 digest published with the GitHub release.
+# ROUNDCUBE_SHA256=

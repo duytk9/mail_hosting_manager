@@ -72,6 +72,7 @@ fetch "$JETBRAINS_MONO_ROOT/JetBrainsMono-Medium.woff2" "$DEST/jetbrains-mono-me
 fetch "$JETBRAINS_MONO_ROOT/JetBrainsMono-Bold.woff2"   "$DEST/jetbrains-mono-bold.woff2"
 
 printf '\nFonts in %s:\n' "$DEST"
-ls -1sh "$DEST" 2>/dev/null | sed 's/^/  /' || true
+find "$DEST" -mindepth 1 -maxdepth 1 -type f -printf '  %kK %f\n' 2>/dev/null \
+  | sort || true
 printf '\nVietnamese renders correctly in the system fallback too, so this is\n'
 printf 'cosmetic. Nothing else needs to change.\n'

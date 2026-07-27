@@ -33,10 +33,16 @@ APP_ROOT="${APP_ROOT:-/opt/mailpanel}"
 RELEASES_ROOT="${RELEASES_ROOT:-/opt/mailpanel-releases}"
 SHARED_ENV="${SHARED_ENV:-/etc/mailpanel/.env}"
 SHARED_STORAGE_ROOT="${SHARED_STORAGE_ROOT:-/var/lib/mailpanel/storage}"
+PREVIOUS_LINK="${PREVIOUS_LINK:-${APP_ROOT}-previous}"
+DEPLOY_LOCK_DIR="${DEPLOY_LOCK_DIR:-${RELEASES_ROOT}/.deploy-lock}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 WEB_USER="${WEB_USER:-www-data}"
 AGENT_USER="${AGENT_USER:-mailpanel-agent}"
 PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php8.3-fpm}"
+UPGRADE_ROUNDCUBE="${UPGRADE_ROUNDCUBE:-1}"
+ROUNDCUBE_VERSION="${ROUNDCUBE_VERSION:-1.6.17}"
+ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
 DRY_RUN=0
 SKIP_MIGRATE=0
@@ -71,6 +77,31 @@ die()  { printf '%sFAIL%s %s\n' "$C_ERR" "$C_OFF" "$1" >&2; exit 1; }
 [[ -n "$SSH_HOST" ]] || die "SSH_HOST is not set. Copy deploy/deploy.env.example to deploy/deploy.env and edit it."
 command -v rsync >/dev/null || die "rsync is required on this machine."
 command -v ssh >/dev/null || die "ssh is required on this machine."
+command -v git >/dev/null || die "git is required on this machine."
+
+safe_absolute_path() {
+  local value="${1:-}"
+  [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ && "$value" != "/" && "$value" != *"/../"* ]]
+}
+
+for configured_path in \
+  "$APP_ROOT" "$RELEASES_ROOT" "$SHARED_ENV" "$SHARED_STORAGE_ROOT" \
+  "$PREVIOUS_LINK" "$DEPLOY_LOCK_DIR"; do
+  safe_absolute_path "$configured_path" || die "Unsafe absolute path in deployment configuration: $configured_path"
+done
+[[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die "Invalid SSH_HOST."
+[[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid SSH_USER."
+[[ "$SSH_PORT" =~ ^[0-9]{1,5}$ && "$SSH_PORT" -ge 1 && "$SSH_PORT" -le 65535 ]] || die "Invalid SSH_PORT."
+[[ "$WEB_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid WEB_USER."
+[[ "$AGENT_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid AGENT_USER."
+[[ "$PHP_FPM_SERVICE" =~ ^[A-Za-z0-9@_.-]+$ ]] || die "Invalid PHP_FPM_SERVICE."
+[[ "$DEPLOY_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$DEPLOY_BRANCH" != *".."* ]] \
+  || die "Invalid DEPLOY_BRANCH."
+[[ "$KEEP_RELEASES" =~ ^[1-9][0-9]*$ ]] || die "KEEP_RELEASES must be a positive integer."
+[[ "$UPGRADE_ROUNDCUBE" =~ ^[01]$ ]] || die "UPGRADE_ROUNDCUBE must be 0 or 1."
+[[ "$ALLOW_DIRTY_DEPLOY" =~ ^[01]$ ]] || die "ALLOW_DIRTY_DEPLOY must be 0 or 1."
+[[ "$DEPLOY_LOCK_DIR" == "$RELEASES_ROOT"/.deploy-* ]] \
+  || die "DEPLOY_LOCK_DIR must be a hidden deployment directory directly under RELEASES_ROOT."
 
 SSH=(ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${SSH_USER}@${SSH_HOST}")
 
@@ -82,6 +113,33 @@ remote_root() {
   else
     printf '%s\n' "$1" | "${SSH[@]}" sudo -n bash -se
   fi
+}
+
+LOCK_TOKEN="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+LOCK_ACQUIRED=0
+
+acquire_remote_lock() {
+  remote_root "set -euo pipefail
+    install -d -m 0755 '$RELEASES_ROOT'
+    if [[ -d '$DEPLOY_LOCK_DIR' ]] && find '$DEPLOY_LOCK_DIR' -maxdepth 0 -mmin +120 -print -quit | grep -q .; then
+      rm -rf -- '$DEPLOY_LOCK_DIR'
+    fi
+    mkdir '$DEPLOY_LOCK_DIR' 2>/dev/null || {
+      echo 'Another MailPanel deployment is already running.' >&2
+      exit 1
+    }
+    printf '%s\n' '$LOCK_TOKEN' >'$DEPLOY_LOCK_DIR/token'
+    chmod 0700 '$DEPLOY_LOCK_DIR'
+    chmod 0600 '$DEPLOY_LOCK_DIR/token'"
+  LOCK_ACQUIRED=1
+}
+
+release_remote_lock() {
+  [[ "$LOCK_ACQUIRED" == "1" ]] || return 0
+  remote_root "if [[ -f '$DEPLOY_LOCK_DIR/token' ]] && [[ \"\$(cat '$DEPLOY_LOCK_DIR/token')\" == '$LOCK_TOKEN' ]]; then
+    rm -rf -- '$DEPLOY_LOCK_DIR'
+  fi" >/dev/null 2>&1 || true
+  LOCK_ACQUIRED=0
 }
 
 step "Checking SSH connectivity to ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
@@ -97,7 +155,10 @@ fi
 if [[ "$MODE" == "status" ]]; then
   step "Release state"
   remote_root "readlink -f '$APP_ROOT' 2>/dev/null || echo '(no current release)'"
-  remote_root "ls -1t '$RELEASES_ROOT' 2>/dev/null | head -5 || echo '(no releases directory)'"
+  remote_root "readlink -f '$PREVIOUS_LINK' 2>/dev/null || echo '(no previous release)'"
+  remote_root "find '$RELEASES_ROOT' -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+    | grep -E '^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?(-[0-9]+)?$' | sort -r | head -5 \
+    || echo '(no releases directory)'"
   step "Service state"
   remote_root "systemctl is-active nginx $PHP_FPM_SERVICE exim4 dovecot rspamd fail2ban 2>&1 | paste -d' ' - - - - - - || true"
   step "Pending migrations"
@@ -106,13 +167,41 @@ if [[ "$MODE" == "status" ]]; then
 fi
 
 if [[ "$MODE" == "rollback" ]]; then
+  acquire_remote_lock || die "Cannot acquire the deployment lock."
+  trap release_remote_lock EXIT
   step "Rolling back to the previous release"
   remote_root "set -euo pipefail
-    prev=\$(ls -1t '$RELEASES_ROOT' | sed -n 2p)
-    [[ -n \"\$prev\" ]] || { echo 'No previous release to roll back to.' >&2; exit 1; }
-    ln -sfn '$RELEASES_ROOT'/\"\$prev\" '$APP_ROOT'
-    systemctl reload '$PHP_FPM_SERVICE'
-    echo \"rolled back to \$prev\""
+    current=\$(readlink -f '$APP_ROOT' 2>/dev/null || true)
+    prev=\$(readlink -f '$PREVIOUS_LINK' 2>/dev/null || true)
+    if [[ -z \"\$prev\" || ! -d \"\$prev\" || \"\$prev\" != '$RELEASES_ROOT'/* || \"\$prev\" == \"\$current\" ]]; then
+      prev=\$(find '$RELEASES_ROOT' -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+        | grep -E '^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?(-[0-9]+)?$' | sort -r \
+        | while read -r name; do
+            path='$RELEASES_ROOT'/\"\$name\"
+            [[ \"\$path\" == \"\$current\" ]] || { printf '%s\n' \"\$path\"; break; }
+          done)
+    fi
+    [[ -n \"\$prev\" && -d \"\$prev\" && \"\$prev\" == '$RELEASES_ROOT'/* ]] \
+      || { echo 'No valid previous release to roll back to.' >&2; exit 1; }
+    ln -sfn \"\$prev\" '$APP_ROOT.new'
+    mv -Tf '$APP_ROOT.new' '$APP_ROOT'
+    if ! bash \"\$prev/deploy/install_agent.sh\" '$APP_ROOT' '$AGENT_USER' '$WEB_USER' \"\$prev\" \
+       || ! systemctl reload '$PHP_FPM_SERVICE' \
+       || ! bash \"\$prev/deploy/healthcheck.sh\" --quiet; then
+      if [[ -n \"\$current\" && -d \"\$current\" ]]; then
+        ln -sfn \"\$current\" '$APP_ROOT.new'
+        mv -Tf '$APP_ROOT.new' '$APP_ROOT'
+        bash \"\$current/deploy/install_agent.sh\" '$APP_ROOT' '$AGENT_USER' '$WEB_USER' \"\$current\" || true
+        systemctl reload '$PHP_FPM_SERVICE' || true
+      fi
+      echo 'Rollback failed validation; the original release was restored.' >&2
+      exit 1
+    fi
+    if [[ -n \"\$current\" && -d \"\$current\" ]]; then
+      ln -sfn \"\$current\" '$PREVIOUS_LINK.new'
+      mv -Tf '$PREVIOUS_LINK.new' '$PREVIOUS_LINK'
+    fi
+    echo \"rolled back to \$(basename \"\$prev\")\""
   ok "rollback complete"
   exit 0
 fi
@@ -139,7 +228,17 @@ ok "no committed credentials detected"
 
 # ------------------------------------------------------------ build
 
-RELEASE="$(date -u +%Y%m%d-%H%M%S)"
+CURRENT_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
+[[ "$CURRENT_BRANCH" == "$DEPLOY_BRANCH" ]] \
+  || die "Refusing to deploy branch '$CURRENT_BRANCH'; DEPLOY_BRANCH is '$DEPLOY_BRANCH'."
+
+if [[ "$ALLOW_DIRTY_DEPLOY" == "0" ]] && [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+  die "The worktree is dirty. Commit and push the exact release before deploying."
+fi
+
+REVISION_FULL="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+REVISION="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
+RELEASE="$(date -u +%Y%m%d-%H%M%S)-$REVISION-$$"
 RELEASE_DIR="$RELEASES_ROOT/$RELEASE"
 
 step "Preparing release $RELEASE"
@@ -167,14 +266,51 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+acquire_remote_lock || die "Cannot acquire the deployment lock."
+ACTIVE_BEFORE="$(remote_root "readlink -f '$APP_ROOT' 2>/dev/null || true")"
+RELEASE_CREATED=0
+AGENT_REFRESHED=0
+ACTIVATED=0
+DEPLOY_SUCCEEDED=0
+
+cleanup_failed_deploy() {
+  local status=$?
+  trap - EXIT
+  set +e
+
+  if [[ "$status" != "0" && "$DEPLOY_SUCCEEDED" != "1" ]]; then
+    warn "deployment failed; restoring the previously active release"
+    remote_root "set +e
+      active_before='$ACTIVE_BEFORE'
+      if [[ '$ACTIVATED' == '1' && -n \"\$active_before\" && -d \"\$active_before\" && \"\$active_before\" == '$RELEASES_ROOT'/* ]]; then
+        ln -sfn \"\$active_before\" '$APP_ROOT.new'
+        mv -Tf '$APP_ROOT.new' '$APP_ROOT'
+        systemctl reload '$PHP_FPM_SERVICE' || true
+      fi
+      if [[ '$AGENT_REFRESHED' == '1' && -n \"\$active_before\" && -d \"\$active_before\" ]]; then
+        bash \"\$active_before/deploy/install_agent.sh\" '$APP_ROOT' '$AGENT_USER' '$WEB_USER' \"\$active_before\" || true
+      fi
+      if [[ '$RELEASE_CREATED' == '1' && '$RELEASE_DIR' != \"\$(readlink -f '$APP_ROOT' 2>/dev/null || true)\" ]]; then
+        rm -rf -- '$RELEASE_DIR'
+      fi" >/dev/null 2>&1 || true
+  fi
+
+  release_remote_lock
+  exit "$status"
+}
+
+trap cleanup_failed_deploy EXIT
+
 step "Creating release directory on the server"
 remote_root "install -d -m 0755 '$RELEASES_ROOT' '$RELEASE_DIR'
   # Seed the new release from the current one so rsync only sends the delta.
   if [[ -d '$APP_ROOT' ]]; then cp -a '$APP_ROOT'/. '$RELEASE_DIR'/ 2>/dev/null || true; fi
   chown -R '$SSH_USER' '$RELEASE_DIR'"
+RELEASE_CREATED=1
 
 step "Transferring application code"
 rsync "${RSYNC_OPTS[@]}" "$REPO_ROOT/" "${SSH_USER}@${SSH_HOST}:$RELEASE_DIR/"
+remote_root "printf '%s\n' '$REVISION_FULL' >'$RELEASE_DIR/REVISION'"
 ok "code transferred"
 
 step "Linking the shared server .env into the release"
@@ -228,6 +364,7 @@ ok "permissions set"
 # release before the migrations, or the running agent stays on the old version.
 step "Refreshing the privileged agent"
 remote_root "bash '$RELEASE_DIR/deploy/install_agent.sh' '$APP_ROOT' '$AGENT_USER' '$WEB_USER' '$RELEASE_DIR'"
+AGENT_REFRESHED=1
 ok "agent, wrapper and sudoers rules refreshed"
 
 if [[ "$SKIP_MIGRATE" == "0" ]]; then
@@ -239,8 +376,21 @@ else
   warn "migrations skipped (--skip-migrate)"
 fi
 
+if [[ "$UPGRADE_ROUNDCUBE" == "1" ]]; then
+  step "Checking Roundcube $ROUNDCUBE_VERSION"
+  remote_root "ROUNDCUBE_VERSION='$ROUNDCUBE_VERSION' WEB_USER='$WEB_USER' PHP_FPM_SERVICE='$PHP_FPM_SERVICE' \
+    bash '$RELEASE_DIR/deploy/upgrade_roundcube.sh' --if-installed"
+  ok "Roundcube check complete"
+fi
+
 step "Activating the release"
+ACTIVATED=1
 remote_root "set -euo pipefail
+  active_before='$ACTIVE_BEFORE'
+  if [[ -n \"\$active_before\" && -d \"\$active_before\" && \"\$active_before\" == '$RELEASES_ROOT'/* ]]; then
+    ln -sfn \"\$active_before\" '$PREVIOUS_LINK.new'
+    mv -Tf '$PREVIOUS_LINK.new' '$PREVIOUS_LINK'
+  fi
   ln -sfn '$RELEASE_DIR' '$APP_ROOT'.new
   if [[ -e '$APP_ROOT' && ! -L '$APP_ROOT' ]]; then
     [[ -d '$APP_ROOT' ]] || { echo '$APP_ROOT exists and is not a directory.' >&2; exit 1; }
@@ -250,16 +400,31 @@ remote_root "set -euo pipefail
   systemctl reload '$PHP_FPM_SERVICE'"
 ok "release $RELEASE is live"
 
-step "Health check"
-if remote "curl -fsS -o /dev/null -w '%{http_code}' -k https://localhost/admin/login" 2>/dev/null | grep -qE '^(200|302)$'; then
-  ok "admin login responds"
-else
-  warn "health check did not return 200/302 — check 'deploy/deploy.sh --status' and the nginx/php-fpm logs"
-fi
+step "Strict post-deploy health check"
+remote_root "bash '$RELEASE_DIR/deploy/healthcheck.sh' --quiet" \
+  || die "Health check failed; the previous release will be restored."
+code="$(remote "curl -ksS -o /dev/null -w '%{http_code}' https://localhost/admin/login" 2>/dev/null || true)"
+[[ "$code" =~ ^(200|302)$ ]] \
+  || die "Admin login health check returned ${code:-no response}; the previous release will be restored."
+ok "healthcheck passed; admin login responded $code"
 
 step "Pruning old releases (keeping $KEEP_RELEASES)"
-remote_root "cd '$RELEASES_ROOT' && ls -1t | tail -n +\$(( $KEEP_RELEASES + 1 )) | xargs -r rm -rf"
+remote_root "set -euo pipefail
+  active_now=\$(readlink -f '$APP_ROOT' 2>/dev/null || true)
+  previous_now=\$(readlink -f '$PREVIOUS_LINK' 2>/dev/null || true)
+  count=0
+  while read -r old; do
+    [[ -n \"\$old\" ]] || continue
+    old_path='$RELEASES_ROOT'/\"\$old\"
+    count=\$((count + 1))
+    if [[ \"\$count\" -le '$KEEP_RELEASES' || \"\$old_path\" == \"\$active_now\" || \"\$old_path\" == \"\$previous_now\" ]]; then
+      continue
+    fi
+    rm -rf -- \"\$old_path\"
+  done < <(find '$RELEASES_ROOT' -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+    | grep -E '^[0-9]{8}-[0-9]{6}(-[0-9a-f]{7,40})?(-[0-9]+)?$' | sort -r)"
 ok "done"
 
+DEPLOY_SUCCEEDED=1
 printf '\n%sDeployed %s to %s%s\n' "$C_OK" "$RELEASE" "$SSH_HOST" "$C_OFF"
 printf 'Roll back with: deploy/deploy.sh --rollback\n'

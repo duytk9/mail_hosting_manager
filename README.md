@@ -32,6 +32,12 @@ Các lần cập nhật sau dùng một trong hai mô hình release (không tr�
 - `deploy/deploy.sh`: đẩy release từ máy trạm qua SSH/rsync.
 - `deploy/deploy-from-git.sh`: máy chủ tự kéo nhánh `main` bằng deploy key chỉ đọc.
 
+Hai luồng đều khóa chống deploy đồng thời, lưu chính xác release trước đó, chạy
+healthcheck bắt buộc và tự phục hồi application/agent nếu phát hành lỗi.
+`deploy-from-git.sh` luôn resolve nhánh/tag thành một commit bất biến trước khi
+build. Roundcube hiện hữu được kiểm tra và nâng cấp idempotent lên phiên bản đã
+pin, với backup mã nguồn và database riêng.
+
 Chạy `bash deploy/healthcheck.sh` trên máy chủ để kiểm tra dịch vụ, TLS,
 database, quyền file và các cổng mail sau khi triển khai.
 

@@ -23,6 +23,8 @@ REPO_CACHE=/opt/mailpanel-repo
 # a deploy never overwrites it and a rollback never reverts it.
 SHARED_ENV=/etc/mailpanel/.env
 SHARED_STORAGE_ROOT=/var/lib/mailpanel/storage
+PREVIOUS_LINK=/opt/mailpanel-previous
+DEPLOY_LOCK_FILE=/var/lock/mailpanel-deploy.lock
 
 KEEP_RELEASES=5
 
@@ -30,6 +32,10 @@ KEEP_RELEASES=5
 WEB_USER=www-data
 PHP_FPM_SERVICE=php8.3-fpm
 COMPOSER_BIN=composer
+
+# Idempotently upgrade an existing Roundcube installation during deployment.
+UPGRADE_ROUNDCUBE=1
+ROUNDCUBE_VERSION=1.6.17
 
 # Host used for the post-deploy health check. With a separate admin hostname,
 # point this at the tenant panel hostname.

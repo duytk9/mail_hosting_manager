@@ -244,7 +244,8 @@ for d in logs sessions cache generated rate_limits app_settings; do
   # One-time migration from the pre-release layout. Never overwrite shared
   # runtime state on later deploys or rollbacks.
   if ! as_root find "$shared_dir" -mindepth 1 -print -quit | grep -q . \
-     && as_root test -d "$APP_ROOT/storage/$d"; then
+     && as_root test -d "$APP_ROOT/storage/$d" \
+     && [[ "$(readlink -f "$APP_ROOT/storage/$d")" != "$(readlink -f "$shared_dir")" ]]; then
     as_root cp -a "$APP_ROOT/storage/$d/." "$shared_dir/"
   fi
 

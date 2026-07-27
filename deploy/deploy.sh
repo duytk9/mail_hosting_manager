@@ -212,7 +212,8 @@ remote_root "set -euo pipefail
     shared_dir='$SHARED_STORAGE_ROOT'/\"\$d\"
     install -d -m 0770 -o '$WEB_USER' -g '$WEB_USER' \"\$shared_dir\"
     if ! find \"\$shared_dir\" -mindepth 1 -print -quit | grep -q . \
-       && [[ -d '$APP_ROOT/storage'/\"\$d\" ]]; then
+       && [[ -d '$APP_ROOT/storage'/\"\$d\" ]] \
+       && [[ \"\$(readlink -f '$APP_ROOT/storage'/\"\$d\")\" != \"\$(readlink -f \"\$shared_dir\")\" ]]; then
       cp -a '$APP_ROOT/storage'/\"\$d\"/. \"\$shared_dir\"/
     fi
     chown -R '$WEB_USER':'$WEB_USER' \"\$shared_dir\"

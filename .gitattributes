@@ -1,0 +1,27 @@
+# Normalise line endings in the repository to LF.
+#
+# The panel is deployed on Linux and executes shell scripts and Python from the
+# repository. A CRLF shebang ("#!/usr/bin/env bash\r") makes the kernel fail with
+# "bad interpreter: no such file or directory", so these files must never be
+# committed with Windows line endings.
+* text=auto eol=lf
+
+*.sh            text eol=lf
+*.py            text eol=lf
+*.php           text eol=lf
+*.sql           text eol=lf
+*.service       text eol=lf
+*.md            text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.js            text eol=lf
+
+agent/mailpanel-agent-runner     text eol=lf
+agent/mailpanel-web-agent-runner text eol=lf
+agent/mailpanel-system-wrapper   text eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary

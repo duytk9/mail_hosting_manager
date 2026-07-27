@@ -23,7 +23,11 @@ __pycache__/
 /storage/sessions/*
 /storage/generated/*
 /storage/rate_limits/*
+# Runtime security settings: holds the portal domain, super-admin IP allowlist
+# and the encrypted SMTP password. Never commit this.
+/storage/app_settings/*
 !/storage/cache/.gitkeep
 !/storage/logs/.gitkeep
 !/storage/sessions/.gitkeep
 !/storage/generated/.gitkeep
+!/storage/app_settings/.gitkeep

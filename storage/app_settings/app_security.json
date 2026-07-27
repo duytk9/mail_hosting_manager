@@ -1,7 +1,0 @@
-{
-    "super_admin_ip_allowlist_enabled": false,
-    "super_admin_ip_allowlist": [
-        "127.0.0.1"
-    ],
-    "portal_domain": "portal.duytk.net"
-}

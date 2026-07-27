@@ -154,6 +154,12 @@ configure_acme_profile() {
       export ACME_MAIL_HOST_PATTERNS='mail.%s'
       export ACME_WEB_HOST_PATTERNS='webmail.%s,autodiscover.%s,autoconfig.%s'
       ;;
+    portal_only)
+      # Matches AcmeTlsService::PROFILES['portal_only']: apex only, no mail/web SANs.
+      export ACME_INCLUDE_APEX=1
+      export ACME_MAIL_HOST_PATTERNS=' '
+      export ACME_WEB_HOST_PATTERNS=' '
+      ;;
     *)
       exit 72
       ;;
@@ -512,7 +518,10 @@ EOF
     ;;
   rspamd-set-multimap)
     install -d -m 0755 /etc/rspamd/local.d
-    for FILE in "$SERVICE" "$ARG1" "$ARG2" "$ARG3" "$ARG4" "${6:-}"; do
+    # $2..$7 = ip_wl, ip_bl, sender_wl, sender_bl, rcpt_wl, rcpt_bl
+    # (ARG1..ARG4 are $3..$6, so the sixth map file is $7 - not $6.)
+    ARG5="${7:-}"
+    for FILE in "$SERVICE" "$ARG1" "$ARG2" "$ARG3" "$ARG4" "$ARG5"; do
       [[ -n "$FILE" && -f "$FILE" ]] || exit 83
     done
     install -m 0644 "$SERVICE" /etc/rspamd/local.d/ip_whitelist.map
@@ -520,7 +529,7 @@ EOF
     install -m 0644 "$ARG2" /etc/rspamd/local.d/sender_whitelist.map
     install -m 0644 "$ARG3" /etc/rspamd/local.d/sender_blacklist.map
     install -m 0644 "$ARG4" /etc/rspamd/local.d/rcpt_whitelist.map
-    install -m 0644 "${6}" /etc/rspamd/local.d/rcpt_blacklist.map
+    install -m 0644 "$ARG5" /etc/rspamd/local.d/rcpt_blacklist.map
     /usr/bin/systemctl reload rspamd || true
     ;;
   rspamd-set-tenant-rules)
@@ -875,26 +884,80 @@ PY
     PASSWORD_FILE="$ARG1"
     [[ -n "$PASSWORD_FILE" && -f "$PASSWORD_FILE" ]] || exit 68
     exec python3 - "$SERVICE" "$PASSWORD_FILE" <<'PY'
-import crypt
+# NOTE: the `crypt` and `spwd` stdlib modules were removed in Python 3.13
+# (PEP 594), so this script reads /etc/shadow itself and calls libcrypt's
+# crypt(3) through ctypes when the stdlib module is unavailable.
+import ctypes
+import ctypes.util
+import hmac
 import pwd
-import spwd
 import sys
+
+
+def shadow_hash_for(username: str):
+    with open("/etc/shadow", "r", encoding="utf-8", errors="surrogateescape") as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split(":")
+            if len(fields) >= 2 and fields[0] == username:
+                return fields[1]
+    return None
+
+
+def crypt_with_setting(password: str, setting: str):
+    try:
+        import crypt as _crypt  # Python <= 3.12
+    except ImportError:
+        _crypt = None
+
+    if _crypt is not None:
+        return _crypt.crypt(password, setting)
+
+    candidates = []
+    located = ctypes.util.find_library("crypt")
+    if located:
+        candidates.append(located)
+    candidates += ["libcrypt.so.2", "libcrypt.so.1", "libcrypt.so"]
+
+    for candidate in candidates:
+        try:
+            library = ctypes.CDLL(candidate, use_errno=True)
+        except OSError:
+            continue
+
+        library.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        library.crypt.restype = ctypes.c_char_p
+        result = library.crypt(password.encode("utf-8"), setting.encode("utf-8"))
+
+        return result.decode("utf-8") if result else None
+
+    raise OSError("libcrypt is not available")
+
 
 username = sys.argv[1]
 password_file = sys.argv[2]
 
 try:
     pwd.getpwnam(username)
-    shadow_hash = spwd.getspnam(username).sp_pwdp
+    shadow_hash = shadow_hash_for(username)
     with open(password_file, "r", encoding="utf-8") as handle:
         password = handle.read().rstrip("\n")
 except Exception:
     raise SystemExit(1)
 
-if not shadow_hash or shadow_hash in {"!", "*", "x"}:
+# Empty, locked ("!" / "!!" / "!<hash>") and disabled ("*", "x") accounts must
+# never authenticate, even if a hash is still present behind the lock marker.
+if not shadow_hash or shadow_hash in {"!", "!!", "*", "x"} or shadow_hash[0] in {"!", "*"}:
     raise SystemExit(1)
 
-raise SystemExit(0 if crypt.crypt(password, shadow_hash) == shadow_hash else 1)
+try:
+    computed = crypt_with_setting(password, shadow_hash)
+except Exception:
+    raise SystemExit(1)
+
+if not computed:
+    raise SystemExit(1)
+
+raise SystemExit(0 if hmac.compare_digest(computed, shadow_hash) else 1)
 PY
     ;;
   acme-tls-provision-domain)

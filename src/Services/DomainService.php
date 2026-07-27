@@ -221,18 +221,27 @@ final class DomainService
                 ]);
 
             $db->commit();
-        } catch (\Exception $e) {
-            $db->rollBack();
+        } catch (\Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+
             throw $e;
         }
 
-        $agentRes = $this->agentClient->renameDomain([
-            'action' => 'rename',
-            'old_domain' => $oldDomainName,
-            'new_domain' => $newDomainName
-        ]);
-        if (isset($agentRes['result']['returncode']) && $agentRes['result']['returncode'] !== 0) {
-            // throw new \RuntimeException('Failed to rename physical directory: ' . $agentRes['result']['stderr']);
+        $storageRenameError = null;
+        try {
+            $agentRes = $this->agentClient->renameDomain([
+                'action' => 'rename',
+                'old_domain' => $oldDomainName,
+                'new_domain' => $newDomainName
+            ]);
+
+            if ((int) ($agentRes['result']['returncode'] ?? 1) !== 0) {
+                $storageRenameError = 'Mail storage rename failed; check service logs.';
+            }
+        } catch (Throwable) {
+            $storageRenameError = 'Mail storage rename failed; check service logs.';
         }
 
         $webmailSyncError = $this->syncWebmailDomains();
@@ -241,9 +250,19 @@ final class DomainService
             'target_type' => 'domain',
             'target_id' => $domainId,
             'tenant_id' => $domain['tenant_id'] ?? null,
-            'new_values' => ['domain' => $newDomainName, 'webmail_sync_error' => $webmailSyncError],
+            'new_values' => [
+                'domain' => $newDomainName,
+                'webmail_sync_error' => $webmailSyncError,
+                'mail_storage_rename_error' => $storageRenameError,
+            ],
             'old_values' => ['domain' => $oldDomainName],
         ]);
+
+        if ($storageRenameError !== null) {
+            // The DB now points at the new name while /var/vmail still holds the old
+            // directory: surfacing this is required, otherwise mail silently disappears.
+            throw new RuntimeException('Domain was renamed in the database, but the mail storage directory rename failed.');
+        }
     }
 
     private function syncWebmailDomains(): ?string

@@ -10,6 +10,9 @@ use RuntimeException;
 
 final class RateLimiterService
 {
+    /** Roughly 1-in-N rate-limit checks also sweep expired buckets. */
+    private const CLEANUP_PROBABILITY = 200;
+
     private ?PDO $pdo = null;
     private ?string $storagePath = null;
 
@@ -80,10 +83,22 @@ final class RateLimiterService
             throw new RuntimeException('Rate limiter database is not configured.');
         }
         
-        $this->pdo->beginTransaction();
+        // Never nest transactions: PDO::beginTransaction() throws when one is already
+        // active, and committing here would silently commit the caller's work.
+        $startedTransaction = false;
+        if (!$this->pdo->inTransaction()) {
+            $this->pdo->beginTransaction();
+            $startedTransaction = true;
+        }
+
         try {
-            // Clean up expired buckets generically
-            $this->pdo->exec('DELETE FROM rate_limits WHERE expires_at <= ' . time());
+            // Sweep expired buckets occasionally instead of on every single request:
+            // running a range DELETE inside every rate-limit transaction causes
+            // needless gap locking and deadlocks against the SELECT ... FOR UPDATE below.
+            if (random_int(1, self::CLEANUP_PROBABILITY) === 1) {
+                $cleanup = $this->pdo->prepare('DELETE FROM rate_limits WHERE expires_at <= ?');
+                $cleanup->execute([time()]);
+            }
 
             $stmt = $this->pdo->prepare('SELECT attempts, expires_at FROM rate_limits WHERE bucket = ? FOR UPDATE');
             $stmt->execute([$hash]);
@@ -110,10 +125,21 @@ final class RateLimiterService
             ');
             $stmt->execute([$hash, $state['attempts'], $state['expires_at']]);
 
-            $this->pdo->commit();
+            if ($startedTransaction) {
+                $this->pdo->commit();
+            }
+
             return $state;
         } catch (\Throwable $e) {
-            $this->pdo->rollBack();
+            // rollBack() on an already-closed transaction throws and would mask $e.
+            if ($startedTransaction && $this->pdo->inTransaction()) {
+                try {
+                    $this->pdo->rollBack();
+                } catch (\Throwable) {
+                    // Ignore: the original failure below is the meaningful one.
+                }
+            }
+
             throw new RuntimeException('Rate limiter failure: ' . $e->getMessage(), 0, $e);
         }
     }

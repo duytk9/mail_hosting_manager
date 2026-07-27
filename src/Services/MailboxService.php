@@ -135,9 +135,11 @@ final class MailboxService implements MailboxPasswordManager
             'status' => $data['status'] ?? 'active',
             'force_password_change' => (int) ($data['force_password_change'] ?? 0),
             'imap_enabled' => (int) ($data['imap_enabled'] ?? 1),
-            'pop3_enabled' => (int) ($data['pop3_enabled'] ?? $package['enable_pop3']),
+            // $package can be null when the tenant's package row is missing; fall back to
+            // the service defaults instead of silently disabling POP3/ManageSieve.
+            'pop3_enabled' => (int) ($data['pop3_enabled'] ?? $package['enable_pop3'] ?? 1),
             'smtp_enabled' => (int) ($data['smtp_enabled'] ?? 1),
-            'managesieve_enabled' => (int) ($data['managesieve_enabled'] ?? $package['enable_managesieve']),
+            'managesieve_enabled' => (int) ($data['managesieve_enabled'] ?? $package['enable_managesieve'] ?? 1),
         ]);
         $this->passwordHistory->store((int) $mailbox['id'], (int) $tenant['id'], $passwordHash);
         $storageProvisionError = null;

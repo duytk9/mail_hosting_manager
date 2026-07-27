@@ -35,7 +35,7 @@ $checksumTransitions = [
     // tightly bound old->new checksum transition is schema-compatible.
     '014_optimize_operational_indexes.sql' => [
         'fd1e6377805ca8df08495c285383575ffb6627725b66b961f48f6743e97008af'
-            => 'e9247b733043083d763f7fae6191df80ce69aec73fef390d7494072f9d344f74',
+            => '7b0008e5f7e694f9335d8898db15aa71ee70bb29f4aa3a66a315fde5b6016e1f',
     ],
 ];
 

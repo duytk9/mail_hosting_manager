@@ -20,6 +20,10 @@ final class MigrationRunnerSecurityTest extends TestCase
         $this->assertStringContainsString('Applied migration file was modified', $source);
         $this->assertStringContainsString('checksumTransitions', $source);
         $this->assertStringContainsString('applied-compatible', $source);
+        $migration014 = file_get_contents(dirname(__DIR__) . '/database/migrations/014_optimize_operational_indexes.sql');
+        $this->assertIsString($migration014);
+        $migration014Checksum = hash('sha256', str_replace("\r\n", "\n", $migration014));
+        $this->assertStringContainsString($migration014Checksum, $source);
     }
 
     public function test_superseded_duplicate_foreign_key_migration_is_not_active(): void

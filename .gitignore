@@ -32,4 +32,5 @@ __pycache__/
 !/storage/logs/.gitkeep
 !/storage/sessions/.gitkeep
 !/storage/generated/.gitkeep
+!/storage/rate_limits/.gitkeep
 !/storage/app_settings/.gitkeep

@@ -554,11 +554,11 @@ EOF
   service-reload)
     case "$SERVICE" in nginx|exim|dovecot|rspamd|fail2ban|clamav) ;; *) exit 64 ;; esac
     case "$SERVICE" in
-      nginx) exec /usr/bin/systemctl reload nginx ;;
-      exim) exec /usr/bin/systemctl reload exim4 ;;
-      dovecot) exec /usr/bin/systemctl reload dovecot ;;
-      rspamd) exec /usr/bin/systemctl reload rspamd ;;
-      fail2ban) exec /usr/bin/systemctl reload fail2ban ;;
+      nginx) exec /usr/bin/systemctl reload-or-restart nginx ;;
+      exim) exec /usr/bin/systemctl reload-or-restart exim4 ;;
+      dovecot) exec /usr/bin/systemctl reload-or-restart dovecot ;;
+      rspamd) exec /usr/bin/systemctl reload-or-restart rspamd ;;
+      fail2ban) exec /usr/bin/systemctl reload-or-restart fail2ban ;;
       clamav) exec /usr/bin/systemctl restart clamav-daemon ;;
     esac
     ;;

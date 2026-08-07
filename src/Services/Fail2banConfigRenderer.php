@@ -50,14 +50,22 @@ logpath = /var/log/exim4/mainlog
 maxretry = 5
 findtime = 10m
 bantime = 1h
+CONF;
+
+        if ($this->webmailEnabled) {
+            $content .= <<<CONF
 
 [webmail-auth]
-enabled = {$webmailEnabled}
+enabled = true
 filter = mailpanel-webmail-auth
 logpath = {$webmailLogPath}
 maxretry = 5
 findtime = 10m
 bantime = 1h
+CONF;
+        }
+
+        $content .= <<<CONF
 
 [sshd]
 enabled = false

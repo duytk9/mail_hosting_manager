@@ -871,8 +871,12 @@ RC
     chown -R root:"$WEB_USER" "$WEBMAIL_ROOT"
     find "$WEBMAIL_ROOT" -type d -exec chmod 0750 {} +
     find "$WEBMAIL_ROOT" -type f -exec chmod 0640 {} +
+    
+    # Touch the log file so fail2ban can start monitoring it immediately
+    touch "$WEBMAIL_ROOT/logs/userlogins.log"
     chown -R "$WEB_USER":"$WEB_USER" "$WEBMAIL_ROOT/temp" "$WEBMAIL_ROOT/logs"
     chmod 0770 "$WEBMAIL_ROOT/temp" "$WEBMAIL_ROOT/logs"
+    chmod 0660 "$WEBMAIL_ROOT/logs/userlogins.log"
     # The installer directory is a remote-configuration surface; remove it.
     rm -rf "$WEBMAIL_ROOT/installer"
     ok "roundcube installed and locked down"

@@ -316,8 +316,24 @@ if [[ "$UNATTENDED" == "0" ]]; then
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 fi
 
-# ------------------------------------------------------------------ packages
+# ------------------------------------------------------------------ system preparation
 
+step "System Preparation"
+
+if swapon --show | grep -q "^/"; then
+  skip "swap is already configured"
+elif [[ -f /swapfile ]]; then
+  skip "/swapfile exists but is not active, skipping creation"
+else
+  run fallocate -l 2G /swapfile
+  chmod 0600 /swapfile
+  run mkswap /swapfile
+  run swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  ok "created 2GB swap file"
+fi
+
+# ------------------------------------------------------------------ packages
 step "Installing packages (this takes a few minutes)"
 
 export DEBIAN_FRONTEND=noninteractive

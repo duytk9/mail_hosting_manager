@@ -282,15 +282,31 @@ ask APP_ROOT       "Install directory" "$APP_ROOT_DEFAULT"
 [[ "$ADMIN_USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid username: $ADMIN_USERNAME"
 [[ "$APP_ROOT" == /* ]] || die "Install directory must be an absolute path."
 
-# Secrets are generated, never prompted, and never echoed.
+# Secrets and unique identifiers are generated, never prompted, and never echoed.
+# Each installation gets its own database name and users to prevent credential reuse.
+DB_SUFFIX="$(openssl rand -hex 3)"
+DB_NAME="mp_${DB_SUFFIX}"
+DB_USER="mp_${DB_SUFFIX}_user"
+DOVECOT_DB_USER="mp_${DB_SUFFIX}_dovecot"
 DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)"
 APP_KEY="base64:$(openssl rand -base64 32)"
 TOTP_ENCRYPTION_KEY="base64:$(openssl rand -base64 32)"
 ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)Aa1!"
 
+# If .env already exists, reuse existing DB credentials to stay consistent.
+if [[ -f "$SHARED_ENV" ]]; then
+  DB_NAME="$(grep -E '^DB_DATABASE=' "$SHARED_ENV" | cut -d= -f2- || echo "$DB_NAME")"
+  DB_USER="$(grep -E '^DB_USERNAME=' "$SHARED_ENV" | cut -d= -f2- || echo "$DB_USER")"
+  DOVECOT_DB_USER="$(grep -E '^DOVECOT_DB_USERNAME=' "$SHARED_ENV" | cut -d= -f2- || echo "$DOVECOT_DB_USER")"
+  [[ -n "$DB_NAME" ]] || DB_NAME="mp_${DB_SUFFIX}"
+  [[ -n "$DB_USER" ]] || DB_USER="mp_${DB_SUFFIX}_user"
+  [[ -n "$DOVECOT_DB_USER" ]] || DOVECOT_DB_USER="mp_${DB_SUFFIX}_dovecot"
+fi
+
 ok "Panel hostname : $PANEL_HOSTNAME"
 ok "Super admin    : $ADMIN_EMAIL ($ADMIN_USERNAME)"
 ok "Install dir    : $APP_ROOT"
+ok "Database       : $DB_NAME (user: $DB_USER)"
 ok "Webmail        : $([[ "$WITH_WEBMAIL" == "1" ]] && echo yes || echo no)"
 ok "ClamAV         : $([[ "$WITH_CLAMAV" == "1" ]] && echo yes || echo no)"
 
@@ -493,25 +509,25 @@ step "Configuring MariaDB"
 systemctl is-active --quiet mariadb || run systemctl start mariadb
 run systemctl enable mariadb
 
-if mysql -N -B -e "SELECT 1 FROM mysql.user WHERE user='mailpanel' AND host='127.0.0.1'" 2>/dev/null | grep -q 1; then
+if mysql -N -B -e "SELECT 1 FROM mysql.user WHERE user='${DB_USER}' AND host='127.0.0.1'" 2>/dev/null | grep -q 1; then
   if [[ -f "$SHARED_ENV" ]]; then
-    skip "database user already exists; keeping the password from $SHARED_ENV"
+    skip "database user $DB_USER already exists; keeping the password from $SHARED_ENV"
     DB_PASSWORD=""
   else
     # The user exists but the file holding its password is gone, so the password
     # is unrecoverable. Rotate it rather than writing an empty one into .env.
     warn "database user exists but $SHARED_ENV is missing; rotating the password"
-    mysql -e "ALTER USER 'mailpanel'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}'; FLUSH PRIVILEGES;"
+    mysql -e "ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}'; FLUSH PRIVILEGES;"
     ok "database password rotated"
   fi
 else
   mysql <<SQL
-CREATE DATABASE IF NOT EXISTS mailpanel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'mailpanel'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
-GRANT ALL PRIVILEGES ON mailpanel.* TO 'mailpanel'@'127.0.0.1';
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-  ok "database and user created"
+  ok "database $DB_NAME and user $DB_USER created"
 fi
 
 # Dovecot needs its own read-only account: it authenticates mail users and must
@@ -522,20 +538,20 @@ fi
 # not exist yet ("ERROR 1146: Table doesn't exist") and the schema is created
 # several steps later.
 DOVECOT_DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)"
-if mysql -N -B -e "SELECT 1 FROM mysql.user WHERE user='mailpanel_dovecot' AND host='127.0.0.1'" 2>/dev/null | grep -q 1; then
+if mysql -N -B -e "SELECT 1 FROM mysql.user WHERE user='${DOVECOT_DB_USER}' AND host='127.0.0.1'" 2>/dev/null | grep -q 1; then
   if [[ -f "$SHARED_ENV" ]]; then
-    skip "dovecot database user already exists; keeping the password from $SHARED_ENV"
+    skip "dovecot database user $DOVECOT_DB_USER already exists; keeping the password from $SHARED_ENV"
     DOVECOT_DB_PASSWORD=""
   else
     # Same reasoning as the panel user above: the password is unrecoverable
     # without the .env, so rotate rather than write an empty one.
     warn "dovecot database user exists but $SHARED_ENV is missing; rotating the password"
-    mysql -e "ALTER USER 'mailpanel_dovecot'@'127.0.0.1' IDENTIFIED BY '${DOVECOT_DB_PASSWORD}'; FLUSH PRIVILEGES;"
+    mysql -e "ALTER USER '${DOVECOT_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DOVECOT_DB_PASSWORD}'; FLUSH PRIVILEGES;"
     ok "dovecot database password rotated"
   fi
 else
-  mysql -e "CREATE USER IF NOT EXISTS 'mailpanel_dovecot'@'127.0.0.1' IDENTIFIED BY '${DOVECOT_DB_PASSWORD}'; FLUSH PRIVILEGES;"
-  ok "dovecot database account created (grants follow the migrations)"
+  mysql -e "CREATE USER IF NOT EXISTS '${DOVECOT_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DOVECOT_DB_PASSWORD}'; FLUSH PRIVILEGES;"
+  ok "dovecot database account $DOVECOT_DB_USER created (grants follow the migrations)"
 fi
 
 # ------------------------------------------------------------------ .env
@@ -560,11 +576,11 @@ APP_KEY=${APP_KEY}
 DB_DRIVER=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_DATABASE=mailpanel
-DB_USERNAME=mailpanel
+DB_DATABASE=${DB_NAME}
+DB_USERNAME=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
 
-DOVECOT_DB_USERNAME=mailpanel_dovecot
+DOVECOT_DB_USERNAME=${DOVECOT_DB_USER}
 DOVECOT_DB_PASSWORD=${DOVECOT_DB_PASSWORD}
 
 APP_ROOT=${APP_ROOT}
@@ -696,7 +712,7 @@ step "Granting Dovecot read access"
 
 MISSING_TABLES=""
 for table in mailboxes domains tenants; do
-  mysql -N -B -e "SELECT 1 FROM information_schema.tables WHERE table_schema='mailpanel' AND table_name='${table}'" 2>/dev/null | grep -q 1 \
+  mysql -N -B -e "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='${table}'" 2>/dev/null | grep -q 1 \
     || MISSING_TABLES="$MISSING_TABLES $table"
 done
 
@@ -704,10 +720,10 @@ if [[ -n "$MISSING_TABLES" ]]; then
   die "Migrations reported success but these tables are missing:$MISSING_TABLES. See $LOG_FILE"
 fi
 
-mysql <<'SQL'
-GRANT SELECT ON mailpanel.mailboxes TO 'mailpanel_dovecot'@'127.0.0.1';
-GRANT SELECT ON mailpanel.domains   TO 'mailpanel_dovecot'@'127.0.0.1';
-GRANT SELECT ON mailpanel.tenants   TO 'mailpanel_dovecot'@'127.0.0.1';
+mysql <<SQL
+GRANT SELECT ON \`${DB_NAME}\`.mailboxes TO '${DOVECOT_DB_USER}'@'127.0.0.1';
+GRANT SELECT ON \`${DB_NAME}\`.domains   TO '${DOVECOT_DB_USER}'@'127.0.0.1';
+GRANT SELECT ON \`${DB_NAME}\`.tenants   TO '${DOVECOT_DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
 ok "dovecot may read mailboxes, domains and tenants (nothing else)"

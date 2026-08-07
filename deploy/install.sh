@@ -320,17 +320,23 @@ fi
 
 step "System Preparation"
 
-if swapon --show | grep -q "^/"; then
+if swapon --show 2>/dev/null | grep -q "^/"; then
   skip "swap is already configured"
 elif [[ -f /swapfile ]]; then
   skip "/swapfile exists but is not active, skipping creation"
 else
-  run fallocate -l 2G /swapfile
-  chmod 0600 /swapfile
-  run mkswap /swapfile
-  run swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  ok "created 2GB swap file"
+  # Use '|| true' because swap creation fails on LXC/OpenVZ containers
+  if fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null; then
+    chmod 0600 /swapfile
+    if mkswap /swapfile 2>/dev/null && swapon /swapfile 2>/dev/null; then
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      ok "created 2GB swap file"
+    else
+      warn "could not enable swap (likely inside a container); continuing anyway"
+    fi
+  else
+    warn "could not allocate swap file; continuing anyway"
+  fi
 fi
 
 # ------------------------------------------------------------------ packages
